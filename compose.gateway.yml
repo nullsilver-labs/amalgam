@@ -1,0 +1,8 @@
+# VPS overlay: same image, gateway command, supervised.
+#   docker compose -f compose.yml -f compose.gateway.yml up -d
+services:
+  amalgam:
+    command: amalgam-telegram
+    restart: unless-stopped
+    stdin_open: false
+    tty: false

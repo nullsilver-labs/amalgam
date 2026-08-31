@@ -1,0 +1,23 @@
+services:
+  amalgam:
+    build: .
+    stdin_open: true
+    tty: true
+    env_file: .env
+    environment:
+      TZ: ${TZ:-Europe/Rome}
+      # Memory commits must work without a ~/.gitconfig in the image.
+      GIT_AUTHOR_NAME: amalgam
+      GIT_AUTHOR_EMAIL: amalgam@localhost
+      GIT_COMMITTER_NAME: amalgam
+      GIT_COMMITTER_EMAIL: amalgam@localhost
+    volumes:
+      # Identity: bind mount, not a named volume, so `git log` works from the
+      # host. That is the review mechanism; it must not be trapped inside Docker.
+      - ${AMALGAM_HOME:-~/.amalgam}:/root/.amalgam
+      # What the agent may touch. The agent's bash sees the container, not the
+      # host: an unmounted path does not exist for it.
+      - ${WORKSPACE:-./workspace}:/workspace
+      # The repo itself, for developing amalgam with amalgam.
+      - ./:/work
+    working_dir: /workspace
