@@ -3,7 +3,8 @@ import { env } from '$env/dynamic/private';
 import { error } from '@sveltejs/kit';
 import { database } from '$lib/server/db';
 import { body } from '$lib/server/http';
-import { readProviders, resolveModel } from '$lib/server/config';
+import { resolveModel } from '$lib/server/config';
+import { modelCatalog } from '$lib/server/model-catalog';
 import { generate, ProviderError } from '$lib/server/providers';
 import { assembleContext, attachSources, chatInputSchema, contextBudget, type Budget, type SourceExcerpt } from '$lib/server/context';
 import { readSettings } from '$lib/server/settings';
@@ -44,8 +45,8 @@ export async function POST(event: import('./$types').RequestEvent) {
   requireScope(event, 'generate');
   const { request } = event;
   const input = await body(request, chatInputSchema);
-  const selected = resolveModel(readProviders(env), input.model);
-  if (!selected) error(400, 'Select a configured model in Connections');
+  const selected = resolveModel((await modelCatalog(env)).providers, input.model);
+  if (!selected) error(400, 'Model unavailable. Reload and select a model; check Settings → Models for discovery errors or configure a manual list.');
   // Before the transaction: reading another application is slow and may fail,
   // and neither belongs inside a row lock on this conversation.
   const excerpts = await fetchSources(input.sources);

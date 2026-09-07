@@ -43,11 +43,23 @@ Integration tokens are rows in `api_tokens`, prefix `amg_`, with explicit scopes
 
 `compose.yaml` runs a nonroot/read-only Node app and a PostgreSQL database. Only the app is published, on loopback port 8790. The private database network is internal; the app also has an egress-capable network to contact configured providers. `.env` is excluded from Git and Docker build context, but injected secrets are still visible to administrators with Docker access.
 
-Run setup, configure models, then `docker compose up -d --build --wait`. The DB healthcheck gates app startup; the application healthcheck performs a DB round trip. It deliberately uses Node's HTTP client with an explicit Host header because recent fetch implementations may ignore Host overrides.
+Run setup, configure providers, then `docker compose up -d --build --wait`. The DB healthcheck gates app startup; the application healthcheck performs a DB round trip. It deliberately uses Node's HTTP client with an explicit Host header because recent fetch implementations may ignore Host overrides.
 
 Default app origin is exactly `http://localhost:8790`, not `http://127.0.0.1:8790`. Set `ORIGIN` if using another address/port. Browser-facing Host must match it. Health probes should also supply that Host. Changing the bind port requires updating both `AMALGAM_PORT` and `ORIGIN`.
 
 Never share one DB between dev and production or multiple app replicas. Startup recovery treats unfinished messages as interrupted. A single-user application password is required even on loopback. Use a long random value; sign-in attempts are globally throttled to ten per minute in the app process. This is a local defense, not a public-service abuse-control system.
+
+## Model catalogs and manual overrides
+
+For an OpenAI-compatible provider, configure its `*_BASE_URL` and `*_API_KEY` (optional only for keyless services). Use the API base including `/v1` or the vendor's equivalent. `OPENAI_BASE_URL` defaults to `https://api.openai.com/v1`; hosted OpenAI and Anthropic slots require a key before they are enabled. Extra slots also need their names in `PROVIDERS`; see `.env.example`.
+
+Empty or omitted `*_MODELS` enables server-side `GET <base>/models` for OpenAI-style slots on authenticated bootstrap/chat requests. No startup generation, paid completion probe, background polling, unconfigured-provider probing or automatic provider fallback occurs. Keys stay upstream; browser requests cannot supply a provider URL. Redirects are refused rather than forwarding credentials, and failed authentication is never retried without a key.
+
+Catalog reads have a five-second total deadline, a 4 MiB body ceiling and a 2,000-entry limit. Malformed/oversized answers and non-2xx responses become provider-specific feedback in Settings › Models, not a workspace failure. Successful results are cached in memory for five minutes, failures for 30 seconds; concurrent callers share one request. Reload after expiry to retry. Failed refreshes preserve the last successful list, clearly marked stale, until a successful refresh, configuration change or restart. A successfully refreshed list may remove IDs. Missing selections remain visibly unavailable, including after a cold-cache failure or browser reload; amalgam never substitutes another model/provider. Sending is disabled until the selected ID returns or you explicitly choose an available replacement.
+
+A nonempty comma-separated `*_MODELS` list is an authoritative override: discovery for that slot is disabled and the list works offline. Use it for APIs without `/models`, to restrict non-chat catalog entries, or to declare known context windows (`model-id:32k`). **Anthropic requires this manual list.** Discovered context windows stay unknown; the instance budget applies and may exceed the model's actual limit. Listing is not proof of chat compatibility or generation permission, and manual configuration is not a connection test.
+
+After editing the server environment, recreate only the app with the deployment's existing Compose files (base example: `docker compose up -d --no-deps --wait app`); restarting an existing container alone does not update its environment. Protect the environment file and do not weaken authentication or expose a keyless inference endpoint to solve a catalog failure.
 
 ## Optional corpus and inference networks
 
@@ -66,6 +78,26 @@ Defaults inside those networks:
 - Embedding API: `http://embedder:8788/v1` (OpenAI-compatible `/embeddings` route)
 
 The embedding address is still configuration only; nothing calls it yet. The corpus address is called, on request, by the read-only connector below. The two networks are separate on purpose — sharing a model server is a narrower thing to allow than sharing an application API, and the boundaries should move independently.
+
+### Connecting to corpus already behind Caddy
+
+Keep the existing corpus route and browser origin. A shared Docker network is optional: if amalgam can reach corpus's existing HTTPS hostname, use it directly in amalgam's `.env`:
+
+```dotenv
+CORPUS_BASE_URL=https://corpus.example.com
+CORPUS_TOKEN=crp_REPLACE_WITH_A_READ_SCOPED_TOKEN
+CORPUS_PUBLIC_URL=https://corpus.example.com
+```
+
+Mint the token in the existing corpus deployment (`corpus token create "amalgam" --scopes read`); do not recreate corpus using different Compose files just to obtain a token. Neither URL includes `/api`. Preserve the rest of amalgam's `.env`, including passwords and model-provider settings, then recreate the app with its existing Compose configuration. With the base deployment:
+
+```sh
+docker compose up -d --build --no-deps --wait app
+```
+
+No `compose.corpus.yaml`, extra allowed service host, shared library mount, or CORS change is needed for this HTTPS path. The proxy must pass the bearer Authorization header and API requests through rather than intercepting them with another login page. Settings → corpus → Check now verifies authentication as well as reachability.
+
+Publishing amalgam itself is a separate step: add its own DNS record and Caddy site, set its HTTPS `ORIGIN`, and publish its port on an interface Caddy can reach (see below). If a DDNS script maintains your home IP, add amalgam's hostname to that script too. Some updaters only update existing records: create the initial A record separately and verify its proxy setting. Keep existing corpus DNS and proxy settings unchanged.
 
 ### The corpus connector
 
@@ -128,6 +160,8 @@ amalgam.example.com {
   }
 }
 ```
+
+When Caddy bind-mounts a single config file, an editor's atomic save can leave its running container reading the old inode. Validate the new host file via a temporary copy in the container, then recreate the Caddy container to refresh the mount; a plain reload of the stale mounted path will not apply your edit. Retain certificate volumes, and account for the brief interruption to other proxied services.
 
 This example assumes Caddy runs on the host and can reach loopback. A containerized Caddy needs an explicitly shared network or a host-published port instead; its `127.0.0.1` is not the host. This route preserves the incoming `Host`, so nothing more is needed: set `ORIGIN=https://amalgam.example.com` and recreate the app. If your proxy rewrites `Host`, it must send `X-Forwarded-Host`, and you must name it in `AMALGAM_TRUSTED_PROXIES` — that is the only way the app will read the header. With an https origin the session cookie is `Secure`. Streaming proxies must not buffer SSE.
 

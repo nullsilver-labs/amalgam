@@ -43,7 +43,9 @@ async function attach(query: string, title: string) {
 test('corpus: Settings reports a connected library, endpoint and all', async () => {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const dialog = page.getByRole('dialog');
-  await dialog.getByRole('button', { name: 'corpus', exact: true }).click();
+  const corpusTab = dialog.getByRole('button', { name: 'corpus', exact: true });
+  await expect(corpusTab).toHaveText('corpus');
+  await corpusTab.click();
   await expect(dialog.getByText('mock-corpus:8892')).toBeVisible();
   await expect(dialog.getByText('Connected', { exact: true })).toBeVisible();
   await expect(dialog.getByText('this token may read the library')).toBeVisible();

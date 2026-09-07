@@ -10,24 +10,25 @@ Requires Docker Engine + Compose. Node 22+ is needed only for setup/development 
 
 ```sh
 node scripts/setup.mjs
-# Edit .env: configure a provider's API key and explicit model IDs.
+# Edit .env: configure a provider's API base URL and key (OpenAI has a default URL).
 docker compose up -d --build --wait
 ```
 
 By default, open **http://localhost:8790**. Reaching it from another machine is the next section.
 
-Sign in with `APP_PASSWORD` from `.env`. The setup script generates independent random application and database passwords and won't overwrite an existing file. No model request is made until you send a message. The interface works without configured models, but cannot generate responses.
+Sign in with `APP_PASSWORD` from `.env`. The setup script generates independent random application and database passwords and won't overwrite an existing file. No generation request is made until you send a message. Configured OpenAI-compatible model catalogs are read automatically on authenticated workspace load. The interface works without configured models, but cannot generate responses.
 
 Without Node, copy `.env.example` to `.env` and set `APP_PASSWORD` and `POSTGRES_PASSWORD` yourself using `openssl rand -hex 24`. Use URL-safe hexadecimal for the database password because it is interpolated into a connection URL. Protect `.env` (`chmod 600 .env`).
 
 ### Connections
 
-Use the model IDs your account or server supports. No automatic catalog, default paid model, subscription-token import, or fallback provider.
+For OpenAI-compatible providers, an API base URL and key are enough (keys are optional for keyless services). Empty or omitted `*_MODELS` enables server-side `GET <base>/models` discovery. A nonempty comma-separated list overrides discovery entirely, works offline, and limits the picker to those IDs. Anthropic still requires a manual list. There is no generation probe, subscription-token import, or fallback provider.
 
 ```dotenv
 # OpenAI Chat Completions-compatible text models
 OPENAI_API_KEY=your-key
-OPENAI_MODELS=your-model-id,another-model-id
+# Optional manual override; otherwise discover using OpenAI's default /v1 base:
+# OPENAI_MODELS=your-model-id,another-model-id
 
 # Anthropic Messages API
 ANTHROPIC_API_KEY=your-key
@@ -35,7 +36,7 @@ ANTHROPIC_MODELS=your-claude-model-id
 
 # Local Ollama, llama.cpp, or another compatible service
 COMPATIBLE_BASE_URL=http://host.docker.internal:11434/v1
-COMPATIBLE_MODELS=your-local-model
+# COMPATIBLE_MODELS=your-local-model:8k  # optional override with a known window
 # COMPATIBLE_API_KEY=optional-key
 # COMPATIBLE_NAME=How the picker should name it
 
@@ -44,15 +45,19 @@ PROVIDERS=openrouter,ollama
 OPENROUTER_NAME=OpenRouter
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_API_KEY=your-key
-OPENROUTER_MODELS=anthropic/claude-sonnet-4:200k
+# OPENROUTER_MODELS=anthropic/claude-sonnet-4:200k  # optional override
 OLLAMA_NAME=Ollama
 OLLAMA_BASE_URL=http://host.docker.internal:11434/v1
-OLLAMA_MODELS=llama3.1:8b:8k
+# OLLAMA_MODELS=llama3.1:8b:8k  # optional override
 ```
 
-The three built-in slots keep their defaults. A slot named in `PROVIDERS` reads `<PREFIX>_BASE_URL`, `<PREFIX>_MODELS`, optionally `<PREFIX>_API_KEY` and `<PREFIX>_NAME`, and `<PREFIX>_KIND=anthropic` when the endpoint speaks Anthropic's Messages API rather than OpenAI's chat completions. Model IDs are qualified by their slot, so the same model behind two providers stays two choices. The compose file hands the whole `.env` to the app, so a new slot needs no compose change.
+Use the API base (including `/v1` or the vendor's equivalent), not a `/models` or `/chat/completions` URL. The three built-in slots keep their defaults. A slot named in `PROVIDERS` reads `<PREFIX>_BASE_URL`, `<PREFIX>_MODELS`, optionally `<PREFIX>_API_KEY` and `<PREFIX>_NAME`, and `<PREFIX>_KIND=anthropic` when the endpoint speaks Anthropic's Messages API rather than OpenAI's chat completions. Model IDs are qualified by their slot, so the same model behind two providers stays two choices. The compose file hands the whole `.env` to the app, so a new slot needs no compose change.
 
-Append `:<tokens>` or `:<n>k` to a model ID to declare its context window, as in `gpt-5:400k` or `llama3.1:8b:8k`; the server then trims history to fit it, leaving room for the reply. Only a trailing all-digit segment of a thousand or more is read this way, so IDs with colons of their own are safe. Enable only the connections you use, then `docker compose up -d` to recreate the app with changed environment settings. Native providers require a key; compatible endpoints may be keyless. The UI shows model and destination, never keys. “Configured” is not a verified connectivity claim.
+Append `:<tokens>` or `:<n>k` to a model ID to declare its context window, as in `gpt-5:400k` or `llama3.1:8b:8k`; the server then trims history to fit it, leaving room for the reply. Only a trailing all-digit segment of a thousand or more is read this way, so IDs with colons of their own are safe. Enable only the connections you use, then `docker compose up -d` to recreate the app with changed environment settings. Native providers require a key; compatible endpoints may be keyless. The UI shows model and destination, never keys. Explicit lists are not connectivity checks. Discovered IDs confirm only that the catalog responded: they may include embeddings, image or other non-chat models, and do not verify generation access. Use a manual list to restrict choices.
+
+Discovery runs only for configured OpenAI-style slots, never unconfigured hosted defaults or Anthropic. Bootstrap and chat share an in-memory catalog, with concurrent reads deduplicated, a five-second timeout, a 4 MiB response ceiling and a 2,000-entry limit. Redirects are refused, credentials are never retried anonymously, and raw upstream responses/errors are not sent to the browser. Successful lists (including empty ones) are cached for five minutes; failures for 30 seconds. There is no background polling. Reload after expiry to retry; Settings › Models reports each provider's result and manual fallback. Failed refreshes retain the last successful list until a successful refresh, configuration change or app restart. Other connections and the workspace remain usable when discovery fails. An existing selection that is missing from the catalog is kept visibly unavailable, never replaced with another model/provider; sending stays disabled until that ID returns or you explicitly choose an available replacement. Each open tab remembers its selection across reloads.
+
+Discovered context windows are **unknown**, even if the vendor returns window metadata; IDs are not parsed as window declarations. Only explicit `*_MODELS` entries declare windows. The instance budget still applies, and a model with an unknown window can reject an oversized request.
 
 A host-local inference server must be reachable from the Docker host-gateway interface; a server bound only to host `127.0.0.1` usually is not. Prefer a shared Docker network and service DNS for containerized inference. Do not expose an unauthenticated inference server to your LAN or the internet just to make this work. The OpenAI slot sends `max_completion_tokens`; every other OpenAI-style slot sends `max_tokens`. Not every vendor's nominally compatible API supports these exact text-chat semantics.
 

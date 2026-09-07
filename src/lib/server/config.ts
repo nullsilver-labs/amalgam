@@ -13,8 +13,8 @@ export interface Provider {
  * read from its own prefix, upper-cased. A slot reads <PREFIX>_MODELS,
  * _BASE_URL and _API_KEY, and optionally _KIND (openai or anthropic;
  * openai unless the slot is the Anthropic one) and _NAME (what the picker
- * shows). A slot with no models, no endpoint or, for the two hosted
- * built-ins, no key is simply absent.
+ * shows). A slot with no endpoint or, for the two hosted built-ins, no
+ * key is absent. Empty model lists are resolved by the server catalog.
  */
 const BUILT_IN: Record<string, { name: string; kind: ProviderKind; baseUrl: string; keyRequired: boolean }> = {
   openai: { name: 'OpenAI', kind: 'openai', baseUrl: 'https://api.openai.com/v1', keyRequired: true },
@@ -61,7 +61,7 @@ export function readProviders(env: Record<string, string | undefined>): Provider
     const baseUrl = (env[`${prefix}_BASE_URL`] || built?.baseUrl || '').replace(/\/+$/, '');
     const kind = (env[`${prefix}_KIND`] || built?.kind || 'openai').trim().toLowerCase();
     if (kind !== 'openai' && kind !== 'anthropic') throw new Error(`Invalid ${prefix}_KIND: openai or anthropic`);
-    if (!models.length || !baseUrl || (built?.keyRequired && !apiKey)) continue;
+    if (!baseUrl || (built?.keyRequired && !apiKey)) continue;
     let url: URL;
     try { url = new URL(baseUrl); }
     catch { throw new Error(`Invalid ${prefix}_BASE_URL`); }

@@ -19,7 +19,11 @@ function mockResponse(text: string, type = 'text/event-stream'): typeof fetch {
 const frame = (value: unknown) => `data: ${JSON.stringify(value)}\n\n`;
 
 describe('connection configuration', () => {
-  it('makes no provider available without explicit models and credentials', () => expect(readProviders({ OPENAI_API_KEY: 'key' })).toEqual([]));
+  it('includes configured slots without models for discovery, but never enables idle hosted slots', () => {
+    expect(readProviders({})).toEqual([]);
+    expect(readProviders({ OPENAI_MODELS: 'a', ANTHROPIC_BASE_URL: 'https://fixture/v1' })).toEqual([]);
+    expect(readProviders({ OPENAI_API_KEY: 'key' })).toMatchObject([{ id: 'openai', models: [] }]);
+  });
   it('supports a keyless local server and deduplicates model IDs', () => {
     const providers = readProviders({ COMPATIBLE_BASE_URL: 'http://embedder:11434/v1/', COMPATIBLE_MODELS: ' a, b, a ' });
     expect(providers[0].models.map(m => m.name)).toEqual(['a', 'b']); expect(providers[0].baseUrl).toBe('http://embedder:11434/v1');

@@ -48,3 +48,15 @@ Local validation of the read-only corpus connector, 2026-09-07. No paid API call
 - Disposable `amalgam-check` containers, networks and volumes removed afterwards. The real amalgam and corpus stacks were not rebuilt, restarted or reconfigured, and no request was made to the real corpus.
 
 Limitations: the library exercised is a mock, not corpus itself — no real corpus token, rate limiter, embedder or card was involved, and corpus's own compatibility with these three routes is taken from its source, not from a live call. Inference is still mock-backed. The remote destination is a Docker alias with a `.test` name, not a real cloud endpoint over TLS. Nothing here tests a corpus library large enough to exercise the response-size ceilings. Not an independent security audit.
+
+# Model discovery release validation
+
+2026-09-07:
+
+- `npm run check && npm test && npm run build` passed in a secret-free source snapshot: no Svelte errors/warnings, 125 tests across six files, production build successful. All 16 discovery implementation files were byte-compared with the working checkout before release.
+- Discovery tests use mocked catalogs and cover authentication, redirect refusal, timeout/body/count bounds, cache invalidation and deduplication, explicit overrides, and bootstrap/chat selection consistency. Ten state/rendered-UI regressions cover missing selections, blocked send paths, explicit replacement, recovery, conversation history and per-tab persistence.
+- Independent read-only review found a silent-provider-fallback risk when a catalog loses the selected model. The follow-up preserves that selection and blocks sending rather than substituting another provider; reviewer recheck found no remaining issues.
+- Full `npm run test:e2e`: all 10 browser tests passed against the disposable `amalgam-check` stack and its TLS proxy, mock providers and mock corpus. Compose used `--env-file /dev/null`, explicit test-only settings, and the test overlay's empty `env_file`; no production credential reached the fixtures. The test containers, networks and volumes were removed afterwards.
+- The GitHub Actions failure caused by expecting `.67` while parsing `192.168.1.10` was corrected in the test, not in the parser. Lowercase corpus Settings text has an explicit browser assertion.
+
+Limitations: discovery endpoints and selection-failure scenarios are mock-backed/state-rendered tests, not a live-provider browser exercise. A listed model does not prove text-chat compatibility or generation permission; discovered context windows remain unknown. No paid inference was used in validation. Not a security audit.

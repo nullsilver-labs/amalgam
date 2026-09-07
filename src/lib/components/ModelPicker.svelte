@@ -32,10 +32,10 @@
 		aria-haspopup="listbox"
 		aria-expanded={open}
 		aria-controls="model-listbox"
-		disabled={workspace.busy || !workspace.data.models.length}
+		disabled={workspace.busy || workspace.loading || !workspace.data.models.length}
 		onclick={() => (open = !open)}
 	>
-		<span class="picker__name">{workspace.selectedModel ? workspace.selectedModel.name : 'No model connected'}</span>
+		<span class="picker__name">{workspace.selectedModel ? workspace.selectedModel.name : workspace.model ? `${workspace.model} (unavailable)` : 'No model connected'}</span>
 		<ChevronDown size={13} strokeWidth={2} />
 	</button>
 	{#if open}

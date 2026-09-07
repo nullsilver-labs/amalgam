@@ -61,6 +61,9 @@
 	{#if workspace.problem}
 		<Notice class="composer__notice" ondismiss={() => (workspace.problem = '')}>{workspace.problem}</Notice>
 	{/if}
+	{#if workspace.ready && workspace.modelUnavailable}
+		<Notice class="composer__notice" role="status">Selected model “{workspace.model}” is unavailable. Sending is disabled. Choose another model below, or check Settings → Models and reload to retry discovery.</Notice>
+	{/if}
 	{#if workspace.ready && !workspace.data.models.length}
 		<button type="button" class="composer__connect" onclick={() => ui.open('settings')}>
 			<Settings size={14} strokeWidth={1.75} />

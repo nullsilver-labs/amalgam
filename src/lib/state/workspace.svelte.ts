@@ -20,7 +20,7 @@ import { DEFAULT_SETTINGS, type Bootstrap, type ChatEvent, type ChatSettings, ty
 import { prefs } from './prefs.svelte';
 
 const EMPTY: Bootstrap = {
-  conversations: [], projects: [], models: [],
+  conversations: [], projects: [], models: [], modelConnections: [],
   integrations: { corpus: { configured: false, publicUrl: '' }, embeddings: false },
   settings: DEFAULT_SETTINGS
 };
@@ -65,8 +65,21 @@ export class Session {
 
   #requestVersion = 0;
   #generation: AbortController | undefined;
+  // An inherited new-tab default is not a selection for an unopened chat.
+  // Once restored or chosen for that chat, keep it even when unavailable.
+  #modelConversationId: string | null = null;
 
   constructor(model = '') { this.model = model; }
+
+  selectModel(id: string) {
+    this.model = id;
+    this.#modelConversationId = this.conversation?.id ?? null;
+  }
+
+  /** Do not persist an inherited default as an unopened conversation's choice. */
+  get rememberedModel() {
+    return this.conversation && this.#modelConversationId !== this.conversation.id ? undefined : this.model;
+  }
 
   #scope() { return this.conversation?.id || this.projectId || 'new'; }
   #draftKey() { return `amalgam:draft:${this.#scope()}`; }
@@ -105,8 +118,10 @@ export class Session {
       if (version !== this.#requestVersion) return false;
       this.conversation = result.conversation; this.messages = result.messages; this.projectId = this.conversation.project_id;
       this.contextInfo = null; this.loaded = true; this.restoreDraft();
-      const lastModel = [...this.messages].reverse().find(m => m.model)?.model;
-      if (lastModel && workspace.data.models.some(m => m.id === lastModel)) this.model = lastModel;
+      if (this.#modelConversationId !== id) {
+        const lastModel = [...this.messages].reverse().find(m => m.model)?.model;
+        this.selectModel(lastModel || this.model);
+      }
       return true;
     } catch (err) { if (version === this.#requestVersion) this.problem = messageOf(err); return false; }
     finally { if (version === this.#requestVersion) this.loading = false; }
@@ -118,6 +133,7 @@ export class Session {
     if (this.loaded) this.rememberDraft();
     this.loading = false; this.conversation = null; this.messages = []; this.projectId = scope;
     this.contextInfo = null; this.problem = ''; this.loaded = true; this.sources = [];
+    this.#modelConversationId = null;
     this.restoreDraft();
   }
 
@@ -147,6 +163,7 @@ export class Session {
           // included. A refusal leaves both where they were, to send again.
           this.draft = ''; this.sources = []; this.rememberDraft();
           this.conversation = event.conversation; this.projectId = this.conversation.project_id;
+          this.#modelConversationId = this.conversation.id;
           this.rememberDraft();
           this.messages = [...this.messages, event.user, event.assistant];
           this.contextInfo = event.context;
@@ -214,9 +231,13 @@ class Workspace {
   project = $derived(this.data.projects.find(p => p.id === this.projectId) ?? null);
   visibleConversations = $derived(this.data.conversations.filter(c => !this.projectId || c.project_id === this.projectId));
   selectedModel = $derived(this.data.models.find(m => m.id === this.model) ?? null);
+  modelUnavailable = $derived(!!this.model && !this.selectedModel);
   canSend = $derived(this.canSendFrom(this.active));
 
-  canSendFrom(s: Session) { return this.ready && !s.loading && !s.busy && !!s.draft.trim() && !!s.model && !s.streaming; }
+  canSendFrom(s: Session) {
+    return this.ready && !s.loading && !s.busy && !!s.draft.trim()
+      && this.data.models.some(m => m.id === s.model) && !s.streaming;
+  }
 
   /** The tab holding a conversation, if one does. */
   holder(id: string | null | undefined): Session | null {
@@ -241,7 +262,7 @@ class Workspace {
   async boot() {
     try {
       prefs.hydrate();
-      this.active.model = prefs.model;
+      if (!this.active.model) this.active.model = prefs.model;
       await this.refresh();
       this.ready = true;
       this.#restoreTabs();
@@ -256,10 +277,16 @@ class Workspace {
 
   async refresh() {
     this.data = await api<Bootstrap>('/api/bootstrap');
-    for (const s of this.sessions) if (!this.data.models.some(m => m.id === s.model)) s.model = this.data.models[0]?.id || '';
+    // Default only a never-selected session. Catalog failure/removal must not
+    // silently move a person's next message to another model or provider.
+    for (const s of this.sessions) if (!s.model) s.model = this.data.models[0]?.id || '';
   }
 
-  chooseModel(id: string) { this.active.model = id; prefs.setModel(id); }
+  chooseModel(id: string) {
+    if (this.loading || this.busy || !this.data.models.some(m => m.id === id)) return;
+    this.active.selectModel(id);
+    prefs.setModel(id);
+  }
 
   /* ------------------------------------------------------------------
    * Tabs
@@ -269,7 +296,7 @@ class Workspace {
     try {
       const raw = sessionStorage.getItem(TABS_KEY);
       if (!raw) return;
-      const stored = JSON.parse(raw) as { tabs: { id: string | null; title?: string; project: string | null }[]; active: number };
+      const stored = JSON.parse(raw) as { tabs: { id: string | null; title?: string; project: string | null; model?: string }[]; active: number };
       if (!Array.isArray(stored.tabs) || !stored.tabs.length) return;
       const seen = new Set<string>();
       const sessions: Session[] = [];
@@ -281,6 +308,7 @@ class Workspace {
           s.conversation = this.data.conversations.find(c => c.id === t.id) ?? stub(t.id, t.title || 'Conversation', t.project ?? null);
           s.projectId = s.conversation.project_id;
         } else s.projectId = t.project ?? null;
+        if (typeof t.model === 'string' && t.model) s.selectModel(t.model);
         sessions.push(s);
       }
       if (!sessions.length) return;
@@ -291,7 +319,7 @@ class Workspace {
 
   /** Called from an effect on the page, so it runs whenever the tabs change. */
   persistTabs() {
-    const tabs = this.sessions.map(s => ({ id: s.conversation?.id ?? null, title: s.conversation?.title, project: s.projectId }));
+    const tabs = this.sessions.map(s => ({ id: s.conversation?.id ?? null, title: s.conversation?.title, project: s.projectId, model: s.rememberedModel }));
     const active = this.activeIndex;
     if (!this.tabsReady) return;
     try { sessionStorage.setItem(TABS_KEY, JSON.stringify({ tabs, active })); } catch { /* storage may be disabled */ }

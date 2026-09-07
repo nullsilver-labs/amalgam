@@ -43,7 +43,7 @@ describe('hosting policy', () => {
 
 describe('address and CIDR matching', () => {
   it('parses IPv4, IPv6 and the mapped form, and rejects nonsense', () => {
-    expect(Array.from(parseAddress('192.168.1.10')!)).toEqual([192, 168, 1, 67]);
+    expect(Array.from(parseAddress('192.168.1.10')!)).toEqual([192, 168, 1, 10]);
     expect(parseAddress('::1')).toHaveLength(16);
     expect(parseAddress('fd00:0:0:0:0:0:0:1')).toHaveLength(16);
     // A dual-stack socket reports v4 peers this way; a v4 rule must still match.

@@ -40,8 +40,15 @@ export interface ContextInfo {
   /** Absent on requests made before the corpus connector existed, and on requests that attached nothing. */
   sources?: { count: number; tokens: number; truncated: boolean };
 }
+/** Public catalog feedback: host only, no credentials, paths or raw upstream errors. */
+export interface ModelConnection {
+  id: string; name: string; destination: string;
+  state: 'explicit' | 'manual' | 'discovered' | 'stale' | 'error';
+  detail: string; checkedAt: string | null;
+}
 export interface Bootstrap {
   conversations: Conversation[]; projects: Project[]; models: ModelOption[];
+  modelConnections: ModelConnection[];
   integrations: { corpus: CorpusIntegration; embeddings: boolean };
   settings: ChatSettings;
 }

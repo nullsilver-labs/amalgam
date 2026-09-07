@@ -253,7 +253,11 @@
 				</dl>
 			{:else if section === 'models'}
 				<h3 class="panel__title">Connections</h3>
-				<p class="panel__lede">Models the server has been told about. Keys stay on the server; “configured” is not a verified connection.</p>
+				<p class="panel__lede">Explicit lists or model IDs discovered from configured servers. Keys stay on the server. Listing a model does not verify chat support or permission to generate; catalogs may also include non-chat models.</p>
+				{#each workspace.data.modelConnections as connection (connection.id)}
+					<p class="panel__note"><strong>{connection.name} · {connection.destination}</strong><br />{connection.detail}{#if connection.checkedAt}<br />Last discovery attempt: {checkedAt(connection.checkedAt)}{/if}</p>
+				{/each}
+				<p class="panel__note">Discovery is cached for five minutes, failures for 30 seconds. Reload the page after that to retry. A failed refresh keeps the last successful list; a server restart clears it.</p>
 				{#if workspace.data.models.length}
 					<ul class="rows" role="list">
 						{#each workspace.data.models as m (m.id)}
@@ -263,17 +267,19 @@
 									<span class="row__label">{m.name}</span>
 									<span class="row__hint">{m.provider} · {m.destination} · {m.window ? `${formatTokens(m.window)}-token window` : 'window not declared'}</span>
 								</span>
-								<span class="tag">Configured</span>
+								<span class="tag">Listed</span>
 							</li>
 						{/each}
 					</ul>
 				{:else}
-					<p class="panel__lede">No models yet. Add one on the server, then restart {APP_NAME}.</p>
+					<p class="panel__lede">No models available. Configure a provider on the server, or use a manual list if discovery failed.</p>
 				{/if}
 				<h3 class="panel__title">Adding one</h3>
-				<p class="panel__lede">In the server’s <code>.env</code>, set a key and the model IDs your account can use, then <code>docker compose up -d</code>. Append <code>:400k</code> or <code>:400000</code> to an ID to declare its context window; history is then trimmed to fit it. Name further providers in <code>PROVIDERS</code>; each reads its own prefix.</p>
+				<p class="panel__lede">In the server’s <code>.env</code>, set the API base URL and key (optional for keyless local endpoints), then <code>docker compose up -d</code>. OpenAI-compatible providers with empty or omitted <code>*_MODELS</code> use a server-side <code>GET &lt;base&gt;/models</code>; OpenAI’s base URL defaults to its hosted API. No generation is used for discovery. Anthropic still needs a manual list.</p>
+				<p class="panel__lede">A nonempty <code>*_MODELS</code> list overrides discovery entirely and works without a catalog connection. Append <code>:400k</code> or <code>:400000</code> to declare a known context window. Discovered windows are unknown, so the instance budget applies and may exceed a model’s limit. Name further providers in <code>PROVIDERS</code>; each reads its own prefix.</p>
 				<pre class="snippet"><code>OPENAI_API_KEY=your-key
-OPENAI_MODELS=your-model-id:400k
+# Optional offline override, with a known window:
+# OPENAI_MODELS=your-model-id:400k
 
 ANTHROPIC_API_KEY=your-key
 ANTHROPIC_MODELS=your-claude-model-id
@@ -281,14 +287,15 @@ ANTHROPIC_MODELS=your-claude-model-id
 # Ollama, llama.cpp, or another compatible server
 COMPATIBLE_NAME=How the picker should name it
 COMPATIBLE_BASE_URL=http://host.docker.internal:11434/v1
-COMPATIBLE_MODELS=your-local-model
+# COMPATIBLE_API_KEY=your-key-if-required
+# COMPATIBLE_MODELS=your-local-model:8k
 
 # Any number more, each with a prefix of its own
 PROVIDERS=openrouter
 OPENROUTER_NAME=OpenRouter
 OPENROUTER_BASE_URL=https://openrouter.ai/api/v1
 OPENROUTER_API_KEY=your-key
-OPENROUTER_MODELS=a-model-id:200k</code></pre>
+# OPENROUTER_MODELS=a-model-id:200k</code></pre>
 			{:else if section === 'access'}
 				<h3 class="panel__title">This browser</h3>
 				<p class="panel__lede">What this page can actually do where it is being served from. Not settings — what the browser reports. A page served over plain http to anything but localhost is not a secure context, whatever network it travels on.</p>
@@ -417,7 +424,7 @@ OPENROUTER_MODELS=a-model-id:200k</code></pre>
 					<div class="row"><dt class="row__label">Instance</dt><dd class="row__value">Private, single user</dd></div>
 					<div class="row"><dt class="row__label">Storage</dt><dd class="row__value">PostgreSQL on this server</dd></div>
 					<div class="row"><dt class="row__label">Telemetry</dt><dd class="row__value">None</dd></div>
-					<div class="row"><dt class="row__label">Model requests</dt><dd class="row__value">Only to the connection you pick, only when you send</dd></div>
+					<div class="row"><dt class="row__label">Model requests</dt><dd class="row__value">Generation only when you send; model catalogs read automatically</dd></div>
 				</dl>
 				<p class="panel__note">Text chat, projects, search, export and reading cards you attach from a corpus library work today. Attachments of your own, web search, images and voice are planned, not hidden. Devices and integration tokens are under Access.</p>
 			{/if}
