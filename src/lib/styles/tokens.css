@@ -1,0 +1,352 @@
+/*
+ * amalgam design tokens.
+ *
+ * Vendored from the Nullsilver system and extended for an application
+ * surface, the way corpus extends it: two colours, two layers, semantic
+ * indirection. Anything added beyond the site's sheet carries a comment
+ * saying why it exists.
+ *
+ *   --ns-*      Primitives. Raw values. Never reference these in a component.
+ *   everything  Semantic tokens. What a thing *is* (--color-text-muted), not
+ *   else        what it looks like (--ns-silver-400). Components use only these.
+ */
+
+:root {
+	color-scheme: dark;
+
+	/* ===================================================================
+	 * PRIMITIVES — colour
+	 * =================================================================== */
+
+	--ns-black: #0a0a0a;
+
+	/* Silver ramp (#dedad2 is the brand silver). Warm neutral throughout — never let these drift to a cool
+	 * grey, it fights the silver. */
+	--ns-silver-50: #f8f7f5;
+	/* Between 50 and 100, for the light theme's page plate: the same one step
+	 * the dark theme takes from the void to its surface. */
+	--ns-silver-75: #f3f2ef;
+	--ns-silver-100: #eeece8;
+	--ns-silver-200: #dedad2;
+	--ns-silver-300: #c0bcb4;
+	--ns-silver-400: #9c9891;
+	--ns-silver-500: #78746e;
+	--ns-silver-600: #57534e;
+	--ns-silver-700: #3a3733;
+	--ns-silver-800: #232120;
+	--ns-silver-900: #161514;
+	--ns-silver-950: #0f0e0e;
+
+	/* Silver-over-black alpha ramp. Preferred over the solid ramp for borders,
+	 * hairlines and hover washes: it composites correctly over any surface. */
+	--ns-alpha-3: rgb(222 218 210 / 0.03);
+	--ns-alpha-6: rgb(222 218 210 / 0.06);
+	--ns-alpha-10: rgb(222 218 210 / 0.1);
+	--ns-alpha-14: rgb(222 218 210 / 0.14);
+	--ns-alpha-20: rgb(222 218 210 / 0.2);
+	--ns-alpha-35: rgb(222 218 210 / 0.35);
+	--ns-alpha-55: rgb(222 218 210 / 0.55);
+	--ns-alpha-70: rgb(222 218 210 / 0.7);
+	--ns-alpha-80: rgb(222 218 210 / 0.8);
+
+	/* Black-over-silver alpha ramp — the light theme's counterpart. */
+	--ns-ink-3: rgb(10 10 10 / 0.03);
+	--ns-ink-6: rgb(10 10 10 / 0.06);
+	--ns-ink-10: rgb(10 10 10 / 0.1);
+	--ns-ink-14: rgb(10 10 10 / 0.14);
+	--ns-ink-20: rgb(10 10 10 / 0.2);
+	--ns-ink-35: rgb(10 10 10 / 0.35);
+	--ns-ink-55: rgb(10 10 10 / 0.55);
+	--ns-ink-70: rgb(10 10 10 / 0.7);
+	--ns-ink-80: rgb(10 10 10 / 0.8);
+
+	/* ===================================================================
+	 * SEMANTIC — colour
+	 * =================================================================== */
+
+	/* Surfaces, darkest to lightest. */
+	--color-bg: var(--ns-black);
+	--color-surface: var(--ns-silver-950);
+	--color-surface-raised: var(--ns-silver-900);
+	--color-surface-overlay: var(--ns-silver-800);
+	/* The page plate: one step up from the void, so the raised composer on it
+	 * keeps a step of its own in either theme. */
+	--color-plate: var(--ns-silver-950);
+
+	/* Text, most to least prominent. */
+	--color-text: var(--ns-silver-200);
+	--color-text-strong: var(--ns-silver-50);
+	--color-text-muted: var(--ns-alpha-70);
+	--color-text-subtle: var(--ns-alpha-55);
+	--color-text-faint: var(--ns-alpha-35);
+
+	/* The accent is the silver. Emphasis is inversion — silver fill, black text. */
+	--color-accent: var(--ns-silver-200);
+	--color-accent-hover: var(--ns-silver-100);
+	--color-accent-active: var(--ns-silver-300);
+	--color-on-accent: var(--ns-black);
+
+	/* Lines. */
+	--color-border: var(--ns-alpha-10);
+	--color-border-strong: var(--ns-alpha-20);
+	--color-border-lit: var(--ns-alpha-55);
+	--color-border-accent: var(--ns-silver-200);
+
+	/* Interaction washes, layered on top of a surface. */
+	--color-hover: var(--ns-alpha-6);
+	--color-selection: rgb(222 218 210 / 0.22);
+	--color-focus: var(--ns-silver-100);
+	--color-scrollbar: var(--ns-alpha-20);
+
+	/* Behind a dialog or the mobile drawer. Bound to the ink ramp so the light
+	 * theme needs no second value. */
+	--color-scrim: var(--ns-ink-70);
+
+	/* ===================================================================
+	 * TYPOGRAPHY — Satoshi for everything a person wrote; IBM Plex Mono for
+	 * what a machine did: model IDs, code, shortcuts.
+	 * =================================================================== */
+
+	--font-sans:
+		'Satoshi', -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif;
+	--font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', SFMono-Regular, Menlo, monospace;
+
+	--weight-light: 300;
+	--weight-regular: 400;
+	--weight-medium: 500;
+
+	--text-2xs: 0.6875rem; /* 11 */
+	--text-xs: 0.75rem; /* 12 */
+	--text-ui: 0.8125rem; /* 13 — labels inside controls */
+	--text-sm: 0.875rem; /* 14 */
+	--text-base: 1rem; /* 16 — body */
+	--text-md: 1.125rem; /* 18 */
+	--text-lg: 1.25rem; /* 20 */
+	--text-xl: 1.625rem; /* 26 */
+
+	/* Fluid heading sizes, small end = phone, large end = desktop. */
+	--text-display-sm: clamp(1.5rem, 1.2rem + 1.2vw, 1.625rem); /* 24→26 */
+	--text-display-md: clamp(1.75rem, 1.4rem + 1.4vw, 2.125rem); /* 28→34 */
+
+	--leading-none: 1;
+	--leading-tight: 1.05;
+	--leading-snug: 1.1;
+	--leading-normal: 1.4;
+	--leading-relaxed: 1.6;
+	/* Running text read end to end — a response, a project's instructions. */
+	--leading-prose: 1.7;
+
+	--tracking-tighter: -0.03em;
+	--tracking-tight: -0.02em;
+	--tracking-normal: 0;
+	--tracking-wide: 0.02em;
+
+	/* ===================================================================
+	 * SPACE — 4px base
+	 * =================================================================== */
+
+	--space-half: 0.125rem; /* 2 */
+	--space-1: 0.25rem; /* 4 */
+	--space-2: 0.5rem; /* 8 */
+	--space-3: 0.75rem; /* 12 */
+	--space-4: 1rem; /* 16 */
+	--space-5: 1.25rem; /* 20 */
+	--space-6: 1.5rem; /* 24 */
+	--space-8: 2rem; /* 32 */
+	--space-12: 3rem; /* 48 */
+
+	/* ===================================================================
+	 * SHAPE
+	 *
+	 * One rule decides every corner in the app:
+	 *
+	 *   controls  — anything you press that is a single row (buttons, pills,
+	 *               the model picker, the send button): --radius-full.
+	 *   plates    — anything that holds other things (menus, dialogs, the
+	 *               composer, a user's bubble): --radius-lg. Rows nested inside
+	 *               a plate take --radius-md, so inner = outer − padding and
+	 *               the corners stay concentric.
+	 *   marks     — the logo tile and tiny inline chips: --radius-xs / --radius-sm.
+	 * =================================================================== */
+
+	--radius-xs: 2px;
+	--radius-sm: 4px;
+	--radius-md: 8px;
+	--radius-lg: 12px;
+	/* The page plate — the one plate that holds every other. A step above
+	 * --radius-lg so the composer's corner reads as nested inside it. */
+	--radius-xl: 16px;
+	--radius-full: 999px;
+
+	--border-width: 1px;
+	--border-width-thick: 2px;
+
+	/* There are no shadow tokens. On a near-black background drop shadows read
+	 * as mud — depth here comes from hairline rings and from the void. */
+
+	/* ===================================================================
+	 * LAYOUT
+	 * =================================================================== */
+
+	/* The page's one breathing measure: the air inside the sidebar's edge, the
+	 * top bar's inset, the gutter beside the transcript on a phone. */
+	--page-edge: var(--space-3); /* 12 */
+
+	/* The reading column: transcript, composer and the empty state share it. */
+	--chat-measure: 46rem;
+
+	/* The pinned sidebar, and the dock's Chats panel. */
+	--sidebar-w: 16.5rem;
+
+	/* Dialogs: a form, and the wide two-column settings. */
+	--dialog-w: 34rem;
+	--dialog-w-wide: 48rem;
+
+	/* ===================================================================
+	 * APP CHROME
+	 *
+	 * Three control heights, and everything pressable is one of them:
+	 *
+	 * corpus's three, unchanged:
+	 *
+	 *   --control-h-sm  32  chips, the model picker, message actions
+	 *   --control-h     40  the standard control — list rows, icon buttons,
+	 *                       menu rows, inputs, the send button
+	 *   --control-h-lg  48  the hero controls — the search palette's field,
+	 *                       a form's primary button
+	 * =================================================================== */
+
+	--control-h-sm: 2rem; /* 32 */
+	--control-h: 2.5rem; /* 40 */
+	--control-h-lg: 3rem; /* 48 */
+
+	/* The top bar's row: the site's header — the tile's height with one
+	 * page-edge of air above and below, so the tile and the strip sit as
+	 * close to the top as the site's do. On a phone, where the rail's items
+	 * lie in the bar, it is a standard control's height instead. */
+	--topbar-h: calc(var(--logo-h) + var(--page-edge) * 2);
+
+	/* The rail down the left that the brand tile and the navigation stand in:
+	 * a standard control with one page-edge of air on either side. The plate
+	 * keeps clear of it. */
+	--rail-w: calc(var(--control-h) + var(--page-edge) * 2);
+
+	/* The plate's left inset, which is where the top bar's row begins too, so
+	 * the tab strip lines up with the plate's edge. Beside the pinned sidebar
+	 * it is nothing: the sidebar's rows carry --space-2 of air on either side,
+	 * so the plate sits as far from a row as the row sits from the screen's
+	 * edge. In the dock layout the page sets it to the rail. */
+	--plate-x: 0px;
+
+	/* The brand tile: the site's, at its --nav-h, off the grid on purpose.
+	 * A mark, not a button: smaller than a control. */
+	--logo-h: 1.4375rem; /* 23 */
+
+	/* ===================================================================
+	 * MOTION
+	 * =================================================================== */
+
+	--duration-fast: 140ms;
+	--duration-base: 220ms;
+
+	/* One curve. Everything decelerates; nothing eases in, nothing overshoots. */
+	--ease-out: cubic-bezier(0.22, 0.61, 0.24, 1);
+
+	/* The void arrives quickly and leaves slowly — the same clock corpus's
+	 * dock and the site's navbar keep. */
+	--void-in: 280ms;
+	--void-out: 560ms;
+
+	/* ===================================================================
+	 * DEPTH
+	 * =================================================================== */
+
+	/* Dialogs are native <dialog> elements in the top layer; nothing to number. */
+	--z-menu: 100;
+	--z-drawer: 200;
+}
+
+@media (max-width: 47.5rem) {
+	:root {
+		--topbar-h: calc(var(--control-h) + var(--page-edge) * 2);
+	}
+}
+
+/*
+ * =====================================================================
+ * LIGHT THEME
+ *
+ * The same semantic names, repointed. Only colours change: the silver ramp
+ * and the alpha ramp swap for the ink ramp; the accent becomes the black.
+ * No component knows, because no component reads a primitive.
+ *
+ * `[data-theme='light']` is set by prefs; without it, `system` follows the
+ * OS via the media query, guarded so an explicit dark choice wins.
+ * =====================================================================
+ */
+
+@media (prefers-color-scheme: light) {
+	:root:not([data-theme='dark']) {
+		color-scheme: light;
+
+		--color-bg: var(--ns-silver-50);
+		--color-surface: var(--ns-silver-100);
+		--color-surface-raised: var(--ns-silver-100);
+		--color-surface-overlay: var(--ns-silver-200);
+		--color-plate: var(--ns-silver-75);
+
+		--color-text: var(--ns-black);
+		--color-text-strong: var(--ns-black);
+		--color-text-muted: var(--ns-ink-70);
+		--color-text-subtle: var(--ns-ink-55);
+		--color-text-faint: var(--ns-ink-35);
+
+		--color-accent: var(--ns-black);
+		--color-accent-hover: var(--ns-silver-800);
+		--color-accent-active: var(--ns-silver-700);
+		--color-on-accent: var(--ns-silver-200);
+
+		--color-border: var(--ns-ink-10);
+		--color-border-strong: var(--ns-ink-20);
+		--color-border-lit: var(--ns-ink-55);
+		--color-border-accent: var(--ns-black);
+
+		--color-hover: var(--ns-ink-6);
+		--color-selection: rgb(10 10 10 / 0.16);
+		--color-focus: var(--ns-black);
+		--color-scrollbar: var(--ns-ink-20);
+		--color-scrim: var(--ns-ink-35);
+	}
+}
+
+:root[data-theme='light'] {
+	color-scheme: light;
+
+	--color-bg: var(--ns-silver-50);
+	--color-surface: var(--ns-silver-100);
+	--color-surface-raised: var(--ns-silver-100);
+	--color-surface-overlay: var(--ns-silver-200);
+	--color-plate: var(--ns-silver-75);
+
+	--color-text: var(--ns-black);
+	--color-text-strong: var(--ns-black);
+	--color-text-muted: var(--ns-ink-70);
+	--color-text-subtle: var(--ns-ink-55);
+	--color-text-faint: var(--ns-ink-35);
+
+	--color-accent: var(--ns-black);
+	--color-accent-hover: var(--ns-silver-800);
+	--color-accent-active: var(--ns-silver-700);
+	--color-on-accent: var(--ns-silver-200);
+
+	--color-border: var(--ns-ink-10);
+	--color-border-strong: var(--ns-ink-20);
+	--color-border-lit: var(--ns-ink-55);
+	--color-border-accent: var(--ns-black);
+
+	--color-hover: var(--ns-ink-6);
+	--color-selection: rgb(10 10 10 / 0.16);
+	--color-focus: var(--ns-black);
+	--color-scrollbar: var(--ns-ink-20);
+	--color-scrim: var(--ns-ink-35);
+}

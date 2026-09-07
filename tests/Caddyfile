@@ -1,0 +1,27 @@
+# Test fixture only. The TLS front door of the isolated amalgam-check stack.
+#
+# This proxy exists to exercise the path a real deployment takes: the browser
+# speaks HTTPS to a name the app never sees directly, and the app has to decide
+# whether to believe the forwarded headers. So it deliberately does the awkward
+# thing a proxy is allowed to do — it rewrites Host to the upstream and puts the
+# browser's host in X-Forwarded-Host. The app accepts that only because
+# AMALGAM_TRUSTED_PROXIES names this container's pinned address; the same
+# headers from any other peer are ignored, which the browser suite checks.
+{
+	admin off
+	# Only 18793 is served; no port-80 redirect listener in a test container.
+	auto_https disable_redirects
+}
+
+https://localhost:18793 {
+	# A self-signed local CA. Playwright runs with ignoreHTTPSErrors.
+	tls internal
+
+	reverse_proxy app:3000 {
+		header_up Host app:3000
+		header_up X-Forwarded-Host {http.request.hostport}
+		header_up X-Forwarded-Proto https
+		# Streamed responses must arrive as they are written, not in buffers.
+		flush_interval -1
+	}
+}

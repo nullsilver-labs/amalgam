@@ -1,0 +1,62 @@
+name: amalgam
+services:
+  db:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: amalgam
+      POSTGRES_USER: amalgam
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-amalgam-local-development}
+    volumes:
+      - database:/var/lib/postgresql/data
+    networks: [database]
+    healthcheck:
+      test: [CMD-SHELL, 'pg_isready -U amalgam -d amalgam']
+      interval: 5s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+  app:
+    build: .
+    init: true
+    # The whole .env reaches the app, so provider slots need no listing here,
+    # the built-in three and any named in PROVIDERS alike. The container's
+    # own address and database, below, win over anything the file says.
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      HOST: 0.0.0.0
+      PORT: '3000'
+      ORIGIN: ${ORIGIN:-http://localhost:8790}
+      APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in .env to at least 16 characters}
+      DATABASE_URL: postgresql://amalgam:${POSTGRES_PASSWORD:-amalgam-local-development}@db:5432/amalgam
+      BODY_SIZE_LIMIT: '131072'
+      CORPUS_BASE_URL: ${CORPUS_BASE_URL:-}
+      CORPUS_PUBLIC_URL: ${CORPUS_PUBLIC_URL:-}
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}
+    ports:
+      - '${AMALGAM_BIND_ADDRESS:-127.0.0.1}:${AMALGAM_PORT:-8790}:3000'
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+    networks: [default, database]
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: [CMD, node, -e, "require('node:http').get('http://127.0.0.1:3000/api/health',{headers:{Host:new URL(process.env.ORIGIN).host}},r=>process.exit(r.statusCode===200?0:1)).on('error',()=>process.exit(1))"]
+      interval: 15s
+      timeout: 5s
+      start_period: 20s
+      retries: 5
+    security_opt: ['no-new-privileges:true']
+    cap_drop: [ALL]
+    read_only: true
+    tmpfs: [/tmp]
+    restart: unless-stopped
+networks:
+  default: {}
+  database:
+    internal: true
+volumes:
+  database:

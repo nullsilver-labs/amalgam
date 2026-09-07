@@ -1,0 +1,17 @@
+# Private LAN or VPN, over plain HTTP, on purpose.
+#
+#   docker compose -f compose.yaml -f compose.private.yaml up -d --build --wait
+#
+# Set AMALGAM_BIND_ADDRESS to one interface — the server's LAN address — rather
+# than 0.0.0.0, and ORIGIN to exactly what you will type in the browser. This
+# overlay carries the AMALGAM_PRIVATE_HTTP opt-in, which is the operator saying
+# out loud that passwords and conversations will travel unencrypted unless the
+# tunnel encrypts them, and that browsers will not treat the page as a secure
+# context. The app logs that warning once at startup.
+services:
+  app:
+    ports:
+      - '${AMALGAM_BIND_ADDRESS:?Set AMALGAM_BIND_ADDRESS to the interface to publish on}:${AMALGAM_PORT:-8790}:3000'
+    environment:
+      ORIGIN: ${ORIGIN:-http://${AMALGAM_BIND_ADDRESS}:${AMALGAM_PORT:-8790}}
+      AMALGAM_PRIVATE_HTTP: 'true'

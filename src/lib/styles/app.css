@@ -1,0 +1,12 @@
+/*
+ * amalgam — global stylesheet.
+ * Import order matters: fonts, then tokens, then reset, then element
+ * defaults, then the one sheet for rendered Markdown. Everything else is
+ * scoped inside its component.
+ */
+
+@import './fonts.css';
+@import './tokens.css';
+@import './reset.css';
+@import './base.css';
+@import './prose.css';

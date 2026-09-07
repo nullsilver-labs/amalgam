@@ -1,0 +1,20 @@
+# Behind a TLS reverse proxy you run.
+#
+#   docker compose -f compose.yaml -f compose.proxied.yaml up -d --build --wait
+#
+# ORIGIN is the public https address; the app still publishes on loopback by
+# default, because the proxy is what the world talks to. AMALGAM_TRUSTED_PROXIES
+# is required rather than defaulted: X-Forwarded-Host and -Proto are honoured
+# only from the peers it names, so an unset value would mean either believing
+# everyone or believing no one, and neither is a safe guess. Give it the proxy's
+# address or network, e.g. 172.18.0.0/16, or 127.0.0.1 for a proxy on the host.
+#
+# A proxy that preserves the browser's Host header needs no forwarded headers at
+# all; naming it here is still correct, and costs nothing.
+services:
+  app:
+    ports:
+      - '${AMALGAM_BIND_ADDRESS:-127.0.0.1}:${AMALGAM_PORT:-8790}:3000'
+    environment:
+      ORIGIN: ${ORIGIN:?Set ORIGIN to the exact public address, e.g. https://amalgam.example.com}
+      AMALGAM_TRUSTED_PROXIES: ${AMALGAM_TRUSTED_PROXIES:?Set AMALGAM_TRUSTED_PROXIES to the proxy IP or CIDR}

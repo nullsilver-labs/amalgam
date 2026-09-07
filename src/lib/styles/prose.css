@@ -1,0 +1,201 @@
+/*
+ * Rendered Markdown — the one sheet that styles markup Svelte did not
+ * compile, hence global, hence confined to `.prose`. Sizes are the content
+ * scale unchanged; leading steps up for text read end to end.
+ */
+
+.prose {
+	font-size: var(--text-base);
+	line-height: var(--leading-prose);
+	overflow-wrap: anywhere;
+}
+
+.prose > * + * {
+	margin-top: var(--space-4);
+}
+
+.prose h1,
+.prose h2,
+.prose h3,
+.prose h4,
+.prose h5,
+.prose h6 {
+	font-weight: var(--weight-medium);
+	letter-spacing: var(--tracking-tight);
+	line-height: var(--leading-normal);
+	margin-top: var(--space-6);
+	text-wrap: pretty;
+}
+
+.prose h1 {
+	font-size: var(--text-xl);
+}
+
+.prose h2 {
+	font-size: var(--text-lg);
+}
+
+.prose h3 {
+	font-size: var(--text-md);
+}
+
+.prose h4,
+.prose h5,
+.prose h6 {
+	font-size: var(--text-base);
+}
+
+.prose > :is(h1, h2, h3, h4, h5, h6):first-child {
+	margin-top: 0;
+}
+
+.prose ul,
+.prose ol {
+	padding-left: var(--space-6);
+}
+
+.prose li + li {
+	margin-top: var(--space-1);
+}
+
+.prose li > p + p,
+.prose li > ul,
+.prose li > ol {
+	margin-top: var(--space-1);
+}
+
+.prose blockquote {
+	border-left: var(--border-width-thick) solid var(--color-border-lit);
+	padding-left: var(--space-4);
+	color: var(--color-text-muted);
+}
+
+.prose hr {
+	margin-block: var(--space-6);
+}
+
+.prose a {
+	color: var(--color-text-strong);
+	text-decoration: underline;
+	text-decoration-color: var(--color-border-lit);
+}
+
+.prose a:hover {
+	text-decoration-color: currentColor;
+}
+
+/* Inline code: a chip on the raised surface, sized to the text around it. */
+.prose :not(pre) > code {
+	font-size: 0.875em;
+	padding: 0.1em 0.35em;
+	border: var(--border-width) solid var(--color-border);
+	background-color: var(--color-surface-raised);
+	border-radius: var(--radius-sm);
+}
+
+/*
+ * Code blocks: a plate with a header bar naming the language and holding the
+ * copy button that Markdown.svelte adds after render.
+ */
+.prose pre {
+	position: relative;
+	padding: var(--space-4);
+	padding-top: calc(var(--control-h) + var(--space-2));
+	background-color: var(--color-surface);
+	border: var(--border-width) solid var(--color-border);
+	border-radius: var(--radius-lg);
+	overflow: hidden;
+	font-size: var(--text-xs);
+	line-height: var(--leading-relaxed);
+	tab-size: 2;
+}
+
+.prose pre code {
+	display: block;
+	overflow-x: auto;
+	font-size: inherit;
+}
+
+.prose pre::before {
+	content: attr(data-lang);
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: var(--control-h);
+	padding-inline: var(--space-4);
+	display: flex;
+	align-items: center;
+	border-bottom: var(--border-width) solid var(--color-border);
+	color: var(--color-text-subtle);
+	font-family: var(--font-mono);
+	font-size: var(--text-2xs);
+	letter-spacing: var(--tracking-wide);
+}
+
+.prose .code-copy {
+	position: absolute;
+	top: 0;
+	right: var(--space-2);
+	display: inline-flex;
+	align-items: center;
+	gap: var(--space-1);
+	height: var(--control-h);
+	padding-inline: var(--space-2);
+	color: var(--color-text-subtle);
+	font-family: var(--font-sans);
+	font-size: var(--text-2xs);
+	font-weight: var(--weight-medium);
+	letter-spacing: var(--tracking-normal);
+	border-radius: var(--radius-sm);
+	transition: color var(--duration-fast) var(--ease-out);
+}
+
+.prose .code-copy:hover {
+	color: var(--color-text-strong);
+}
+
+.prose .code-copy svg {
+	width: 13px;
+	height: 13px;
+}
+
+.prose .code-copy .is-done {
+	display: none;
+}
+
+.prose .code-copy.is-copied .is-idle {
+	display: none;
+}
+
+.prose .code-copy.is-copied .is-done {
+	display: inline;
+}
+
+.prose table {
+	display: block;
+	max-width: 100%;
+	overflow-x: auto;
+	font-size: var(--text-sm);
+	line-height: var(--leading-normal);
+}
+
+.prose th,
+.prose td {
+	border: var(--border-width) solid var(--color-border-strong);
+	padding: var(--space-2) var(--space-3);
+	text-align: left;
+	vertical-align: top;
+}
+
+.prose th {
+	background-color: var(--color-surface-raised);
+	font-weight: var(--weight-medium);
+	color: var(--color-text-strong);
+}
+
+@media (max-width: 47.5rem) {
+	.prose {
+		font-size: var(--text-sm);
+	}
+}

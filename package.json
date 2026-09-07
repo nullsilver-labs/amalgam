@@ -1,16 +1,40 @@
 {
-  "name": "amalgam-monorepo",
+  "name": "@nullsilver/amalgam",
+  "version": "0.1.0",
+  "license": "MIT",
   "private": true,
   "type": "module",
   "engines": {
-    "node": ">=22"
+    "node": ">=22.12"
   },
-  "workspaces": [
-    "packages/*"
-  ],
   "scripts": {
-    "build": "npm run build --workspaces",
-    "check": "npm run check --workspaces",
-    "test": "npm test --workspaces"
+    "dev": "vite dev --host 127.0.0.1",
+    "build": "vite build",
+    "start": "node --env-file-if-exists=.env build",
+    "prepare": "svelte-kit sync || true",
+    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
+    "test": "vitest run",
+    "test:e2e": "playwright test"
+  },
+  "dependencies": {
+    "@lucide/svelte": "^1.41.0",
+    "@sveltejs/adapter-node": "^5.5.0",
+    "@sveltejs/kit": "^2.37.0",
+    "marked": "^15.0.12",
+    "pg": "^8.16.3",
+    "sanitize-html": "^2.17.0",
+    "svelte": "^5.38.0",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.55.0",
+    "@sveltejs/vite-plugin-svelte": "^6.1.0",
+    "@types/node": "^22.18.0",
+    "@types/pg": "^8.15.5",
+    "@types/sanitize-html": "^2.16.0",
+    "svelte-check": "^4.3.0",
+    "typescript": "^5.9.2",
+    "vite": "^7.1.0",
+    "vitest": "^3.2.4"
   }
 }

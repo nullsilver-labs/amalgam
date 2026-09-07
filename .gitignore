@@ -1,5 +1,15 @@
 node_modules/
-dist/
+.svelte-kit/
+build/
 .env
-workspace/
-*.tgz
+.env.*
+!.env.example
+coverage/
+test-results/
+playwright-report/
+.pi/
+*.log
+# Fontshare proprietary assets are local-only, not redistributed with source.
+static/fonts/satoshi*.woff2
+# Local scratch: inspiration screenshots and the like, never part of the product.
+tmp/

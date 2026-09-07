@@ -1,0 +1,91 @@
+# Isolated test stack ONLY. Always use project name amalgam-check (see README).
+#
+# It runs the app the way a real deployment runs it: behind TLS, behind a proxy
+# that rewrites Host. The proxy sits at a fixed address on a pinned subnet so
+# AMALGAM_TRUSTED_PROXIES can name exactly it and nothing else — which is what
+# makes the untrusted-peer tests meaningful. The app also stays published on
+# 127.0.0.1:18790, so those tests can knock on the door directly.
+#
+# Two model slots exist on purpose, both answered by the same mock: `compatible`
+# reaches it as `mock`, a bare service name the app reads as this machine, and
+# `cloudy` reaches the very same container through the alias
+# api.example-cloud.test, which the app reads as somewhere else. That is how the
+# browser suite checks that attaching library excerpts discloses a remote
+# destination and stays quiet about a local one.
+services:
+  app:
+    # The real .env must not reach the test app: no env file at all, and the
+    # two corpus addresses compose would still interpolate from it blanked.
+    env_file: !reset []
+    environment:
+      COMPATIBLE_NAME: ''
+      COMPATIBLE_BASE_URL: http://mock:8891/v1
+      COMPATIBLE_API_KEY: ''
+      COMPATIBLE_MODELS: fixture-text:32k,alpha-small,alpha-large,beta-small,beta-large,gamma-small,gamma-large
+      PROVIDERS: cloudy
+      CLOUDY_NAME: Example Cloud
+      CLOUDY_BASE_URL: http://api.example-cloud.test:8891/v1
+      CLOUDY_API_KEY: ''
+      # No declared window on purpose: it keeps "32k-token window" unique to the
+      # local fixture in Settings, and exercises the undeclared-window path.
+      CLOUDY_MODELS: cloud-text
+      CORPUS_BASE_URL: http://mock-corpus:8892
+      CORPUS_TOKEN: crp_test_read
+      CORPUS_PUBLIC_URL: ''
+      EMBEDDING_BASE_URL: ''
+      AMALGAM_TRUSTED_PROXIES: ${AMALGAM_TRUSTED_PROXIES:-10.89.79.10}
+    depends_on:
+      mock:
+        condition: service_started
+      mock-corpus:
+        condition: service_started
+  mock:
+    image: node:22-bookworm-slim
+    command: [node, /fixture.mjs]
+    volumes:
+      - ./tests/mock-provider.mjs:/fixture.mjs:ro
+    networks:
+      default:
+        # The same container under a second name, so one provider slot looks
+        # like this machine and the other looks like the internet.
+        aliases: [api.example-cloud.test]
+    read_only: true
+    user: node
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+  mock-corpus:
+    image: node:22-bookworm-slim
+    command: [node, /fixture.mjs]
+    volumes:
+      - ./tests/mock-corpus.mjs:/fixture.mjs:ro
+    networks: [default]
+    read_only: true
+    user: node
+    cap_drop: [ALL]
+    security_opt: ['no-new-privileges:true']
+  proxy:
+    image: caddy:2-alpine
+    volumes:
+      - ./tests/Caddyfile:/etc/caddy/Caddyfile:ro
+      - proxy-data:/data
+      - proxy-config:/config
+    ports:
+      - '127.0.0.1:18793:18793'
+    networks:
+      default:
+        # Pinned, so AMALGAM_TRUSTED_PROXIES above names one address exactly.
+        ipv4_address: 10.89.79.10
+    depends_on:
+      app:
+        condition: service_healthy
+    cap_drop: [ALL]
+    cap_add: [NET_BIND_SERVICE]
+    security_opt: ['no-new-privileges:true']
+networks:
+  default:
+    ipam:
+      config:
+        - subnet: 10.89.79.0/24
+volumes:
+  proxy-data:
+  proxy-config:

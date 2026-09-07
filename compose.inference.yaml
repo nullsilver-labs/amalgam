@@ -1,0 +1,20 @@
+# Opt-in: join the shared inference network to reach an embedder run elsewhere.
+#
+#   docker network create nullsilver-inference   # once, by the operator
+#   docker compose -f compose.yaml -f compose.inference.yaml up -d --build --wait
+#
+# A separate network from the application one on purpose: sharing a model server
+# is a narrower thing to allow than sharing an application API, and the two
+# boundaries should be able to move independently. Sharing an endpoint saves
+# memory and weights, not embedding computation, and it does not mean shared
+# indices or shared content.
+services:
+  app:
+    networks:
+      inference: {}
+    environment:
+      EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-http://embedder:8788/v1}
+networks:
+  inference:
+    external: true
+    name: ${INFERENCE_NETWORK:-nullsilver-inference}

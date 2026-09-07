@@ -1,0 +1,29 @@
+# Opt-in: join the application-integration network so amalgam can reach corpus.
+#
+#   docker network create nullsilver-apps        # once, by the operator
+#   docker compose -f compose.yaml -f compose.corpus.yaml up -d --build --wait
+#
+# Only the app joins. The database keeps its own internal network and is never
+# reachable from there. This never starts, changes or stops corpus, and it does
+# not join corpus's own project network — a shared, named integration network is
+# a boundary both sides chose, whereas corpus_default is corpus's private wiring.
+#
+# Reachability is not authorisation: the connector presents CORPUS_TOKEN, a
+# read-scoped token minted in corpus, and corpus decides what that token may
+# read. Set it in .env. amalgam calls three read routes and only when you ask —
+# a diagnostic probe, a search you typed, and the cards you attached to a
+# message. Nothing is ever written back into the library.
+services:
+  app:
+    networks:
+      apps: {}
+    environment:
+      CORPUS_BASE_URL: ${CORPUS_BASE_URL:-http://corpus:8787}
+      CORPUS_TOKEN: ${CORPUS_TOKEN:-}
+      # Optional, and only for links a person clicks: the browser-reachable
+      # address of corpus. A service name on this network is not one.
+      CORPUS_PUBLIC_URL: ${CORPUS_PUBLIC_URL:-}
+networks:
+  apps:
+    external: true
+    name: ${APPS_NETWORK:-nullsilver-apps}

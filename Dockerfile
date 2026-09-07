@@ -1,20 +1,16 @@
-FROM node:24-slim
-
-# Only what the agent will reach for through `bash`. Anything else is a
-# CLI-with-README installed into the workspace, in a separate deliberate commit.
-RUN apt-get update && apt-get install -y --no-install-recommends \
-      git ripgrep curl ca-certificates tini openssh-client \
-    && rm -rf /var/lib/apt/lists/*
-
-WORKDIR /work
-COPY package.json package-lock.json tsconfig.base.json ./
-COPY packages/amalgam/package.json packages/amalgam/package.json
-COPY packages/telegram/package.json packages/telegram/package.json
+FROM node:22-bookworm-slim AS build
+WORKDIR /app
+COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts
-COPY . /work
-RUN npm run build && npm link ./packages/amalgam && npm link ./packages/telegram
+COPY . .
+RUN npm run check && npm run build && npm prune --omit=dev --ignore-scripts
 
-ENV AMALGAM_HOME=/root/.amalgam
-WORKDIR /workspace
-ENTRYPOINT ["tini", "--"]
-CMD ["amalgam"]
+FROM node:22-bookworm-slim AS runtime
+ENV NODE_ENV=production HOST=0.0.0.0 PORT=3000
+WORKDIR /app
+COPY --from=build --chown=node:node /app/build ./build
+COPY --from=build --chown=node:node /app/node_modules ./node_modules
+COPY --from=build --chown=node:node /app/package.json ./package.json
+USER node
+EXPOSE 3000
+CMD ["node", "build"]
