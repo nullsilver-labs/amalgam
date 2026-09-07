@@ -3,6 +3,7 @@
 	import Button from './Button.svelte';
 	import Dialog from './Dialog.svelte';
 	import Notice from './Notice.svelte';
+	import Switch from './Switch.svelte';
 	import { workspace, messageOf } from '$lib/state/workspace.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { prefs, type Theme } from '$lib/state/prefs.svelte';
@@ -84,7 +85,7 @@
 
 	const SCOPE_NOTES: { id: Scope; hint: string }[] = [
 		{ id: 'read', hint: 'Read conversations, projects and search' },
-		{ id: 'write', hint: 'Create, rename, delete and organise them' },
+		{ id: 'write', hint: 'Create, rename, delete and organise conversations and projects' },
 		{ id: 'generate', hint: 'Send messages to a model — this spends money' },
 		{ id: 'admin', hint: 'Read and change instance chat settings' }
 	];
@@ -102,8 +103,13 @@
 	let tokenExpiry = $state<number | null>(90);
 	let creating = $state(false);
 	/* Shown once, held only in this component, gone when the dialog closes. */
+	let freshId = $state('');
 	let freshSecret = $state('');
 	let secretCopied = $state(false);
+	/* What the token being made will be allowed to do, in one line. */
+	const scopeHint = $derived(tokenScopes.length
+		? SCOPE_NOTES.filter(s => tokenScopes.includes(s.id)).map(s => s.hint).join('. ') + '.'
+		: 'Choose at least one permission.');
 
 	async function loadAccess() {
 		accessBusy = true;
@@ -127,10 +133,12 @@
 	}
 
 	async function createToken() {
-		creating = true; error = ''; freshSecret = ''; secretCopied = false;
+		creating = true; error = ''; freshId = ''; freshSecret = ''; secretCopied = false;
 		try {
 			const created = await workspace.createToken(tokenName.trim(), tokenScopes, tokenExpiry);
+			freshId = created.id;
 			freshSecret = created.secret || '';
+			/* The list is oldest first, so the new one lands at its end. */
 			tokens = [...tokens, { ...created, secret: undefined }];
 			tokenName = '';
 		} catch (err) { error = messageOf(err); }
@@ -148,6 +156,11 @@
 
 	async function copySecret() {
 		secretCopied = await workspace.copy(freshSecret);
+	}
+
+	/* The secret arrives at the end of a list that may sit below the fold. */
+	function reveal(node: HTMLElement) {
+		node.scrollIntoView({ block: 'nearest' });
 	}
 
 	const dateOnly = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium' });
@@ -226,11 +239,16 @@
 				</div>
 
 				<h3 class="panel__title">Thinking</h3>
-				<p class="panel__lede">Asks Claude models to think before answering, adaptively, and to show a summary of it; every reply keeps room for up to 16k tokens of thinking on top of its own. Reasoning that other models send is shown either way. Turn it off for Claude Haiku 4.5 and older Claude models, which reject the request.</p>
-				<label class="toggle">
-					<input type="checkbox" bind:checked={draft.thinking} />
-					<span>Ask models to think before answering</span>
-				</label>
+				<p class="panel__lede">Asks Claude models to think before answering, adaptively, and to show a summary of it; every reply keeps room for up to 16k tokens of thinking on top of its own. Reasoning that other models send is shown either way.</p>
+				<div class="rows">
+					<label class="row row--switch">
+						<span class="row__text">
+							<span class="row__label">Ask models to think before answering</span>
+							<span class="row__hint">Turn it off for Claude Haiku 4.5 and older Claude models, which reject the request.</span>
+						</span>
+						<Switch bind:checked={draft.thinking} label="Ask models to think before answering" />
+					</label>
+				</div>
 
 				<h3 class="panel__title">Suggestions</h3>
 				<p class="panel__lede">The pills under the composer on a new chat. Each drops its text into the composer for you to finish.</p>
@@ -346,36 +364,37 @@ OPENROUTER_API_KEY=your-key
 
 				<h3 class="panel__title">Integration tokens</h3>
 				<p class="panel__lede">Keys for scripts and other programs, each with only the permissions you give it. Send one as <code>Authorization: Bearer …</code> to the <code>/api</code> routes. A token can never sign in, manage devices, or make another token.</p>
-				<div class="token-new">
-					<input class="token-new__name" bind:value={tokenName} maxlength="60" placeholder="What it is for" aria-label="Token name" />
-					<fieldset class="scopes">
-						<legend>Permissions</legend>
-						{#each SCOPE_NOTES as s (s.id)}
-							<label class="scope">
-								<input type="checkbox" checked={tokenScopes.includes(s.id)} onchange={() => toggleScope(s.id)} />
-								<span class="scope__text"><span class="scope__name">{s.id}</span><span class="row__hint">{s.hint}</span></span>
-							</label>
-						{/each}
-					</fieldset>
-					<label class="expiry">
-						<span class="row__hint">Expires</span>
-						<select bind:value={tokenExpiry} aria-label="Token expiry">
-							{#each EXPIRIES as e (e.label)}<option value={e.value}>{e.label}</option>{/each}
-						</select>
+				<div class="mint">
+					<label class="mint__field mint__field--name">
+						<span class="mint__label">Name</span>
+						<input bind:value={tokenName} maxlength="60" placeholder="What it is for" aria-label="Token name" />
 					</label>
-					<Button size="md" onclick={createToken} disabled={creating || !tokenName.trim() || !tokenScopes.length}>
-						<Plus size={13} strokeWidth={2} />{creating ? 'Creating…' : 'Create token'}
-					</Button>
-				</div>
-				{#if freshSecret}
-					<div class="secret">
-						<p class="panel__lede">Copy it now. It is shown once and is not stored — only a hash of it is. If you lose it, revoke the token and make another.</p>
-						<div class="secret__row">
-							<input class="secret__field" readonly value={freshSecret} aria-label="New token secret" onfocus={(event) => event.currentTarget.select()} />
-							<Button variant="outline" size="md" onclick={copySecret}>{secretCopied ? 'Copied' : 'Copy'}</Button>
+					<div class="mint__field" role="group" aria-labelledby="mint-permissions">
+						<span class="mint__label" id="mint-permissions">Permissions</span>
+						<div class="chips">
+							{#each SCOPE_NOTES as s (s.id)}
+								<button type="button" class="chip" class:is-on={tokenScopes.includes(s.id)} aria-pressed={tokenScopes.includes(s.id)} title={s.hint} onclick={() => toggleScope(s.id)}>{s.id}</button>
+							{/each}
+						</div>
+						<span class="mint__hint">{scopeHint}</span>
+					</div>
+					<div class="mint__field" role="radiogroup" aria-labelledby="mint-expires">
+						<span class="mint__label" id="mint-expires">Expires</span>
+						<div class="chips">
+							{#each EXPIRIES as e (e.label)}
+								<button type="button" class="chip" class:is-on={tokenExpiry === e.value} role="radio" aria-checked={tokenExpiry === e.value} onclick={() => (tokenExpiry = e.value)}>{e.label}</button>
+							{/each}
 						</div>
 					</div>
-				{/if}
+					<div class="mint__field">
+						<span class="mint__label" aria-hidden="true"></span>
+						<div>
+							<Button size="md" onclick={createToken} disabled={creating || !tokenName.trim() || !tokenScopes.length}>
+								<Plus size={13} strokeWidth={2} />{creating ? 'Creating…' : 'Create token'}
+							</Button>
+						</div>
+					</div>
+				</div>
 				{#if tokens.length}
 					<ul class="rows tokens" role="list">
 						{#each tokens as t (t.id)}
@@ -386,6 +405,16 @@ OPENROUTER_API_KEY=your-key
 									<span class="row__hint">{t.scopes.join(', ')} · last used {t.last_used_at ? when(t.last_used_at) : 'never'} · expires {t.expires_at ? when(t.expires_at) : 'never'}</span>
 								</span>
 								<Button variant="ghost" size="sm" onclick={() => revokeToken(t.id)}>Revoke token</Button>
+								{#if t.id === freshId && freshSecret}
+									<!-- The secret, shown once, under the row it belongs to. -->
+									<div class="secret" use:reveal>
+										<p class="secret__note">Copy it now. It is shown once and is not stored — only a hash of it is. If you lose it, revoke the token and make another.</p>
+										<div class="secret__row">
+											<input class="secret__field" readonly value={freshSecret} aria-label="New token secret" onfocus={(event) => event.currentTarget.select()} />
+											<Button variant="outline" size="md" onclick={copySecret}>{secretCopied ? 'Copied' : 'Copy'}</Button>
+										</div>
+									</div>
+								{/if}
 							</li>
 						{/each}
 					</ul>
@@ -617,82 +646,102 @@ OPENROUTER_API_KEY=your-key
 	}
 
 	/* ------------------------------------------------------------------
-	 * Access: a token to make, and the secret it hands back once
+	 * Access: a token to make, as corpus mints one — a labelled grid, the
+	 * choices as chips, the primary action under the controls
 	 * --------------------------------------------------------------- */
 
-	.token-new {
+	.mint {
 		display: grid;
 		gap: var(--space-3);
-		justify-items: start;
-		padding: var(--space-4);
-		border: var(--border-width) solid var(--color-border);
-		border-radius: var(--radius-lg);
+		margin-block: var(--space-2) var(--space-3);
 	}
 
-	.token-new__name {
-		width: min(100%, 22rem);
-	}
-
-	.scopes {
+	/* Label column, control column. The label's box is the control's height,
+	 * so it sits centred on the chips (or the field) whatever comes below. */
+	.mint__field {
 		display: grid;
-		gap: var(--space-2);
-		width: 100%;
+		grid-template-columns: 7rem minmax(0, 1fr);
+		column-gap: var(--space-4);
+		row-gap: var(--space-2);
+		align-items: start;
 	}
 
-	.scopes legend {
+	.mint__label {
+		display: flex;
+		align-items: center;
+		height: var(--control-h-sm);
 		font-size: var(--text-xs);
 		font-weight: var(--weight-medium);
-		color: var(--color-text-muted);
-		margin-bottom: var(--space-2);
+		letter-spacing: var(--tracking-wide);
+		color: var(--color-text-subtle);
 	}
 
-	.scope,
-	.toggle {
+	.mint__field--name .mint__label {
+		height: var(--control-h);
+	}
+
+	.mint__hint {
+		grid-column: 2;
+		font-size: var(--text-xs);
+		line-height: var(--leading-normal);
+		color: var(--color-text-subtle);
+	}
+
+	.chips {
 		display: flex;
-		align-items: flex-start;
-		gap: var(--space-3);
-		cursor: pointer;
+		flex-wrap: wrap;
+		gap: var(--space-1);
 	}
 
-	.toggle {
-		align-items: center;
-		font-size: var(--text-sm);
-		color: var(--color-text);
-	}
-
-	.toggle input {
-		accent-color: var(--color-accent);
-	}
-
-	.scope input {
-		margin-top: 0.2em;
-		accent-color: var(--color-accent);
-	}
-
-	.scope__text {
-		display: grid;
-		gap: var(--space-half);
-	}
-
-	.scope__name {
-		font-size: var(--text-sm);
+	/* A chip: a small pill; pressed, it inverts, as emphasis does here. */
+	.chip {
+		height: var(--control-h-sm);
+		padding-inline: var(--space-3);
+		border: var(--border-width) solid var(--color-border-strong);
+		border-radius: var(--radius-full);
+		font-size: var(--text-ui);
 		font-weight: var(--weight-medium);
-		color: var(--color-text);
+		letter-spacing: var(--tracking-tight);
+		color: var(--color-text-muted);
+		cursor: pointer;
+		transition:
+			color var(--duration-fast) var(--ease-out),
+			background-color var(--duration-fast) var(--ease-out),
+			border-color var(--duration-fast) var(--ease-out);
 	}
 
-	.expiry {
-		display: inline-flex;
-		align-items: center;
-		gap: var(--space-3);
+	.chip:hover {
+		border-color: var(--color-border-lit);
+		color: var(--color-text-strong);
 	}
 
-	/* Shown once and never again, so it is given room and a way to copy it. */
+	.chip.is-on {
+		background-color: var(--color-accent);
+		border-color: var(--color-accent);
+		color: var(--color-on-accent);
+	}
+
+	/* A token's row may carry its secret beneath it, once. */
+	.tokens .row {
+		flex-wrap: wrap;
+	}
+
+	/* Shown once and never again, so it is lit, given room and a way to copy it. */
 	.secret {
+		flex-basis: 100%;
 		display: grid;
 		gap: var(--space-2);
-		padding: var(--space-4);
+		margin-top: var(--space-1);
+		margin-left: calc(var(--control-h-sm) + var(--space-3));
+		padding: var(--space-3);
 		border: var(--border-width) solid var(--color-border-lit);
-		border-radius: var(--radius-lg);
+		border-radius: var(--radius-md);
+	}
+
+	.secret__note {
+		font-size: var(--text-xs);
+		line-height: var(--leading-normal);
+		color: var(--color-text-muted);
 	}
 
 	.secret__row {
@@ -812,6 +861,10 @@ OPENROUTER_API_KEY=your-key
 		border-top: var(--border-width) solid var(--color-border);
 	}
 
+	.row--switch {
+		cursor: pointer;
+	}
+
 	.row__glyph {
 		display: flex;
 		align-items: center;
@@ -885,6 +938,24 @@ OPENROUTER_API_KEY=your-key
 	}
 
 	@media (max-width: 47.5rem) {
+		.mint__field {
+			grid-template-columns: 1fr;
+			row-gap: var(--space-1);
+		}
+
+		.mint__label,
+		.mint__field--name .mint__label {
+			height: auto;
+		}
+
+		.mint__hint {
+			grid-column: 1;
+		}
+
+		.secret {
+			margin-left: 0;
+		}
+
 		.settings {
 			grid-template-columns: 1fr;
 			grid-template-rows: auto minmax(0, 1fr);

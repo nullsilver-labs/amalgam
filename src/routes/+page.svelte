@@ -44,7 +44,7 @@
 </script>
 
 <svelte:head>
-	<title>{workspace.current ? `${workspace.current.title} · ` : ''}{APP_NAME}</title>
+	<title>{workspace.current ? `${workspace.current.title} - ` : ''}{APP_NAME}</title>
 	<meta name="robots" content="noindex,nofollow" />
 </svelte:head>
 <svelte:window onkeydown={shortcuts} />

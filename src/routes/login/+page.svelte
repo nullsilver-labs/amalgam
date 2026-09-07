@@ -23,7 +23,7 @@
 </script>
 
 <svelte:head>
-	<title>Sign in · {APP_NAME}</title>
+	<title>Sign in - {APP_NAME}</title>
 	<meta name="robots" content="noindex,nofollow" />
 </svelte:head>
 
