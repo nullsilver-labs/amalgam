@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Ellipsis, Folder, PanelTop, Pencil, Plus, SlidersHorizontal, SquarePen, Trash2, X } from '@lucide/svelte';
+	import { Ellipsis, Folder, Ghost, PanelTop, Pencil, Plus, SlidersHorizontal, SquarePen, Trash2, X } from '@lucide/svelte';
 	import Menu, { type MenuEntry } from './Menu.svelte';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { ui } from '$lib/state/ui.svelte';
@@ -56,6 +56,7 @@
 				<div class="rowwrap">
 					<button type="button" class="row" class:is-active={s.key === workspace.activeKey} onclick={() => { void workspace.activate(s.key); ui.settle(); }}>
 						{#if s.busy}<span class="row__dot" aria-hidden="true"></span>{/if}
+						{#if s.ghost}<span class="row__icon" title="Ghost chat"><Ghost size={16} strokeWidth={1.75} /><span class="sr-only">Ghost chat</span></span>{/if}
 						<span class="row__label">{s.title}</span>
 					</button>
 					<button type="button" class="row__more" aria-label="Close {s.title}" title="Close" onclick={() => workspace.closeTab(s.key)}>

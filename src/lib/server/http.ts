@@ -1,7 +1,9 @@
 import { error } from '@sveltejs/kit';
 import type { ZodType, ZodTypeDef } from 'zod';
+/** What a request body may run to unless a route says otherwise. */
+export const BODY_LIMIT = 128 * 1024;
 // Typed on the schema's output alone, so a defaulted field arrives as the value it was given.
-export async function body<T>(request: Request, schema: ZodType<T, ZodTypeDef, unknown>): Promise<T> {
+export async function body<T>(request: Request, schema: ZodType<T, ZodTypeDef, unknown>, limit = BODY_LIMIT): Promise<T> {
   if (!request.headers.get('content-type')?.startsWith('application/json')) error(415, 'Expected application/json');
   const reader = request.body?.getReader();
   if (!reader) error(400, 'Missing body');
@@ -12,7 +14,7 @@ export async function body<T>(request: Request, schema: ZodType<T, ZodTypeDef, u
       const { value, done } = await reader.read();
       if (done) break;
       size += value.byteLength;
-      if (size > 128 * 1024) { await reader.cancel(); error(413, 'Request is too large'); }
+      if (size > limit) { await reader.cancel(); error(413, 'Request is too large'); }
       chunks.push(value);
     }
   } finally { reader.releaseLock(); }

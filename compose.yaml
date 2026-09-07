@@ -31,7 +31,9 @@ services:
       ORIGIN: ${ORIGIN:-http://localhost:8790}
       APP_PASSWORD: ${APP_PASSWORD:?Set APP_PASSWORD in .env to at least 16 characters}
       DATABASE_URL: postgresql://amalgam:${POSTGRES_PASSWORD:-amalgam-local-development}@db:5432/amalgam
-      BODY_SIZE_LIMIT: '131072'
+      # A ghost chat sends its whole conversation with every message, since
+      # the server keeps none of it; the chat route reads up to this much.
+      BODY_SIZE_LIMIT: '2097152'
       CORPUS_BASE_URL: ${CORPUS_BASE_URL:-}
       CORPUS_PUBLIC_URL: ${CORPUS_PUBLIC_URL:-}
       EMBEDDING_BASE_URL: ${EMBEDDING_BASE_URL:-}

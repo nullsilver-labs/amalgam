@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Download, Ellipsis, PanelLeftOpen, Pencil, SlidersHorizontal, Trash2 } from '@lucide/svelte';
+	import { Download, Ellipsis, Ghost, PanelLeftOpen, Pencil, SlidersHorizontal, Trash2 } from '@lucide/svelte';
 	import Dock from './Dock.svelte';
 	import Menu, { type MenuEntry } from './Menu.svelte';
 	import TabStrip from './TabStrip.svelte';
@@ -14,6 +14,11 @@
 	 * tile, always there — line up with the plate's left edge, and the
 	 * conversation's "…" at the right with its right edge.
 	 *
+	 * The ghost stands at the right too, before the "…": on a blank tab a
+	 * toggle that makes the chat a ghost — written nowhere, gone when its tab
+	 * closes — and once the chat has a message, the same mark, lit, saying
+	 * that it is one. The composer's row keeps to the model and the library.
+	 *
 	 * In the dock layout the rail renders from here — out of the bar's flow
 	 * on a desktop, where it stands down the page's left edge, and lying in
 	 * the bar on a phone.
@@ -21,6 +26,7 @@
 
 	let menuOpen = $state(false);
 	const dock = $derived(prefs.layout === 'dock');
+	const GHOST_HINT = 'A ghost chat is not saved: it lives in this tab and is gone when the tab closes or the page reloads.';
 
 	const items = $derived.by<MenuEntry[]>(() => {
 		const out: MenuEntry[] = [];
@@ -51,6 +57,15 @@
 	{#if workspace.current}<h1 class="sr-only">{workspace.current.title}</h1>{/if}
 
 	<div class="topbar__trail">
+		{#if workspace.canToggleGhost}
+			<button type="button" class="icon-button" aria-label="Ghost chat" aria-pressed={workspace.ghost} title={GHOST_HINT} onclick={() => workspace.toggleGhost()}>
+				<Ghost size={16} strokeWidth={1.75} />
+			</button>
+		{:else if workspace.ghost}
+			<span class="icon-button icon-button--mark" role="img" aria-label="Ghost chat" title={GHOST_HINT}>
+				<Ghost size={16} strokeWidth={1.75} />
+			</span>
+		{/if}
 		{#if workspace.current || workspace.project}
 			<div class="topbar__menu">
 				<button type="button" class="icon-button" aria-label="Conversation menu" aria-haspopup="menu" aria-expanded={menuOpen} onclick={() => (menuOpen = !menuOpen)}>
@@ -112,9 +127,16 @@
 	}
 
 	.icon-button:hover,
-	.icon-button[aria-expanded='true'] {
+	.icon-button[aria-expanded='true'],
+	.icon-button[aria-pressed='true'],
+	.icon-button--mark {
 		color: var(--color-text-strong);
 		background-color: var(--color-hover);
+	}
+
+	/* The mark is the lit toggle, settled: nothing to press. */
+	.icon-button--mark {
+		cursor: default;
 	}
 
 	/* After .icon-button, which would otherwise win the display rule. */

@@ -111,6 +111,16 @@ export interface IntegrationToken {
   secret?: string;
 }
 export interface ChatTurn { role: 'system' | 'user' | 'assistant'; content: string }
+/**
+ * One turn of a ghost chat as the browser sends it back. A ghost chat is
+ * written nowhere — not the database, not the browser's storage — so each
+ * request carries the branch being read, and the server reads it the way it
+ * reads a saved conversation's rows: a turn that did not complete is shown in
+ * the transcript but never given to the model as an answer.
+ */
+export interface HistoryTurn { role: 'user' | 'assistant'; content: string; status?: MessageStatus }
+/** The most turns a ghost request carries: the newest ones, as a saved conversation's path is read to a depth. */
+export const GHOST_HISTORY_TURNS = 200;
 export type ChatEvent =
   | { type: 'start'; conversation: Conversation; user: Message; assistant: Message; context: ContextInfo }
   | { type: 'delta'; text: string }

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DEFAULT_CONTEXT_TOKENS, type ChatTurn, type ContextInfo, type Message, type MessageSource } from '../types';
+import { DEFAULT_CONTEXT_TOKENS, GHOST_HISTORY_TURNS, type ChatTurn, type ContextInfo, type Message, type MessageSource } from '../types';
 
 /*
  * How much of a conversation a request carries.
@@ -97,12 +97,26 @@ export const SOURCE_ID = /^[A-Za-z0-9_-]{1,64}$/;
  * server to fetch: an id, which this server resolves against the one library it
  * was configured with.
  *
- * Two shapes. A new turn carries `text`, and follows `parentId` — the end of
+ * Three shapes. A new turn carries `text`, and follows `parentId` — the end of
  * the branch being read — or, when that is left out, the conversation's own
  * leaf. A regeneration names an assistant message in `regenerate` and carries
  * nothing else: the answer is written again, beside the first, to the same
  * user message with the same attached sources.
+ *
+ * A ghost chat (`ghost: true`) is the third: the server writes nothing down,
+ * so the request carries `history` — the turns before this one, as the browser
+ * holds them — and `text`, the turn to answer. Answering a turn again is the
+ * same request with the history cut short before that turn; nothing on the
+ * server can be named, so `parentId` and `regenerate` have no meaning here.
+ * `conversationId` is the id the first answer handed back, kept so a response
+ * can be stopped and one chat runs one response at a time; it names no row.
  */
+export const historyTurnSchema = z.object({
+  role: z.enum(['user', 'assistant']),
+  content: z.string().max(200_000),
+  status: z.enum(['complete', 'streaming', 'cancelled', 'failed', 'interrupted']).optional()
+});
+
 export const chatInputSchema = z.object({
   conversationId: z.string().uuid().optional(),
   projectId: z.string().uuid().nullable().optional(),
@@ -111,13 +125,23 @@ export const chatInputSchema = z.object({
   sources: z.array(z.string().regex(SOURCE_ID, 'A source id may only contain letters, digits, hyphens and underscores'))
     .max(5, 'At most five sources can be attached to one message').optional(),
   parentId: z.string().uuid().optional(),
-  regenerate: z.string().uuid().optional()
+  regenerate: z.string().uuid().optional(),
+  ghost: z.literal(true).optional(),
+  history: z.array(historyTurnSchema).max(GHOST_HISTORY_TURNS, `A ghost chat carries at most ${GHOST_HISTORY_TURNS} turns`).optional()
 }).superRefine((input, ctx) => {
+  if (input.ghost) {
+    if (!input.history) ctx.addIssue({ code: 'custom', message: 'A ghost chat carries its own history', path: ['history'] });
+    if (input.regenerate || input.parentId) ctx.addIssue({ code: 'custom', message: 'A ghost chat has nothing on the server to name', path: ['ghost'] });
+    if (input.text === undefined) ctx.addIssue({ code: 'custom', message: 'Required', path: ['text'] });
+    return;
+  }
+  if (input.history) ctx.addIssue({ code: 'custom', message: 'Only a ghost chat carries its history', path: ['history'] });
   if (input.regenerate) {
     if (!input.conversationId) ctx.addIssue({ code: 'custom', message: 'A regeneration needs the conversation it belongs to', path: ['conversationId'] });
     if (input.text !== undefined || input.sources || input.parentId) ctx.addIssue({ code: 'custom', message: 'A regeneration carries no text, sources or parent of its own', path: ['regenerate'] });
   } else if (input.text === undefined) ctx.addIssue({ code: 'custom', message: 'Required', path: ['text'] });
 });
+export type ChatInput = z.infer<typeof chatInputSchema>;
 
 /** One card as the turn will quote it. */
 export interface SourceExcerpt {

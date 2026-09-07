@@ -108,11 +108,12 @@ A token is never the owner. It works on `/api/*` only, is ignored outright on pa
 - Sanitized Markdown with copyable, language-labelled code blocks; response copy; keyboard shortcuts.
 - The conversation on a rounded plate, on the page, with a rail down the left edge: the brand tile, then new chat, search and chats at its middle, settings at its foot.
 - Several chats open at once. The open chats sit in a strip above the plate, lined up with its edge, from the first chat on; New chat from inside a chat opens a tab of its own (a blank tab is reused); ⌘-click, middle-click or a row's menu opens a chat in a tab of its own. Open tabs survive a reload of the browser tab; closing a tab that is writing stops its response, as closing the page would. On a phone the open chats head the Chats panel instead.
+- Ghost chats: the ghost at the bar's right on a blank tab makes a chat that is written nowhere — not the database, not the browser's storage. It lives in its tab, answers and branches like any other, and is gone when the tab closes or the page reloads; every message sends the whole chat, since the server keeps none of it. What the provider keeps is its own affair, as ever.
 - A Chats panel off the rail grouping conversations by date, pinnable as a sidebar; ⌘K search palette; dark/light/system theme; responsive phone layout.
 - Instance settings, saved on the server: a system prompt (empty by default), the context budget in tokens, and the suggestion pills on a new chat. ⌘Enter sends; Enter breaks the line.
 - Instance-password sign-in, database-backed sessions you can list and revoke per device, scoped integration tokens for scripts, exact Host and Origin checks, forwarded headers honoured only from configured proxy peers.
 - Server-side persistence, migrations, healthchecks, nonroot/read-only application container.
-- Drafts and open tabs in this browser tab's session storage; theme, model and layout preferences in local storage. No provider credentials are stored in the browser.
+- Drafts and open tabs in this browser tab's session storage (a ghost tab is stored as a blank one, never its chat); theme, model and layout preferences in local storage. No provider credentials are stored in the browser.
 
 **Not implemented yet:** attachments of your own, ingestion or indexing of anything, vector search inside amalgam, automatic retrieval, web search, images/audio/video, voice, editing a sent message, durable reconnectable generation jobs, model-account OAuth, agents/MCP, multi-user accounts, document editor, or UI-based connection editing. The corpus connector reads cards you pick; it is not a knowledge base of amalgam's own.
 
@@ -179,7 +180,7 @@ npm test
 npm run build
 ```
 
-For production Node without Docker, set `DATABASE_URL`, `APP_PASSWORD`, `ORIGIN`, `HOST`, and `PORT`, then `npm run build && npm start`. The startup command loads `.env`; migrations run on first DB access. Do not run dev and production against the same database simultaneously.
+For production Node without Docker, set `DATABASE_URL`, `APP_PASSWORD`, `ORIGIN`, `HOST`, `PORT` and `BODY_SIZE_LIMIT=2097152` (a ghost chat sends its whole conversation with every message; compose.yaml sets the same), then `npm run build && npm start`. The startup command loads `.env`; migrations run on first DB access. Do not run dev and production against the same database simultaneously.
 
 ### Isolated end-to-end checks (no paid API requests)
 

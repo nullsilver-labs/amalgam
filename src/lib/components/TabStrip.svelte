@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Plus, X } from '@lucide/svelte';
+	import { Ghost, Plus, X } from '@lucide/svelte';
 	import { workspace } from '$lib/state/workspace.svelte';
 
 	/*
@@ -34,8 +34,9 @@
 	const litIndex = $derived(hovered ?? workspace.activeIndex);
 
 	/* A lone blank tab has nothing to close: closing it would leave the same
-	 * blank tab. Closing the last chat leaves one. */
-	const lone = $derived(workspace.sessions.length === 1 && !workspace.current && !workspace.messages.length);
+	 * blank tab. Closing the last chat leaves one — and so does closing a lone
+	 * ghost tab, which is how a ghost stops being one. */
+	const lone = $derived(workspace.sessions.length === 1 && workspace.active.fresh && !workspace.active.ghost);
 
 	/** The lit tab's extent along the row, and the row's own length. */
 	let pill = $state<{ start: number; size: number } | null>(null);
@@ -57,7 +58,7 @@
 		jump = lit && !wasLit;
 		wasLit = lit;
 		workspace.sessions.length;
-		for (const s of workspace.sessions) { s.title; s.busy; }
+		for (const s of workspace.sessions) { s.title; s.busy; s.ghost; }
 		lone;
 		measure();
 	});
@@ -120,6 +121,7 @@
 						onfocus={(e) => focus(e, i)}
 					>
 						{#if s.busy}<span class="tab__dot" aria-hidden="true"></span>{/if}
+						{#if s.ghost}<span class="tab__ghost" title="Ghost chat"><Ghost size={12} strokeWidth={1.75} /><span class="sr-only">Ghost chat</span></span>{/if}
 						<span class="tab__label">{s.title}</span>
 					</button>
 					{#if !lone}
@@ -210,6 +212,12 @@
 		min-width: 0;
 		overflow: hidden;
 		text-overflow: ellipsis;
+	}
+
+	/* A ghost chat: its mark before the title, in the label's colour. */
+	.tab__ghost {
+		display: inline-flex;
+		flex: none;
 	}
 
 	/* A response being written: a quiet pulse before the title. */

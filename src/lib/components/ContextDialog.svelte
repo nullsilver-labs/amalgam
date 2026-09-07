@@ -41,7 +41,11 @@
 		<h3>Limits</h3>
 		<p>Context is capped by the token budget in Settings and, when a model declares its window, by that window less room for the reply. Tokens are estimated from characters, on the safe side, not counted by the model’s own tokenizer. Older exchanges drop out first, whole. Partial and failed responses are never reused as answers.</p>
 		<h3>Your data</h3>
-		<p>Conversations are stored on this server. The provider you pick receives the assembled context — self-hosting the interface does not make a cloud model local. There is no automatic fallback to another provider.</p>
+		{#if workspace.ghost}
+			<p>This is a ghost chat: nothing in it is stored on this server or in this browser. Each message sends the whole chat from this tab, since the server keeps none of it, and the chat is gone when the tab closes or the page reloads. The provider you pick still receives the assembled context — self-hosting the interface does not make a cloud model local, and what a provider keeps is its own affair. There is no automatic fallback to another provider.</p>
+		{:else}
+			<p>Conversations are stored on this server. The provider you pick receives the assembled context — self-hosting the interface does not make a cloud model local. There is no automatic fallback to another provider.</p>
+		{/if}
 		<p class="note">Text only for now: no web search, attachments or tools. Responses can be wrong; verify anything that matters.</p>
 	</div>
 </Dialog>

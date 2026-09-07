@@ -234,6 +234,40 @@ test('tabs: the strip is always there, a new chat opens beside the one you are i
   await expect(tabs.getByRole('tab', { name: 'New chat' })).toHaveAttribute('aria-selected', 'true');
   await expect(page.getByRole('heading', { name: 'Where shall we begin?' })).toBeVisible();
   await expect(tabs.getByRole('button', { name: 'Close New chat' })).toHaveCount(0);
+
+  // A blank tab can be made a ghost: the chat is answered but written nowhere.
+  const ghostToggle = page.getByRole('button', { name: 'Ghost chat', exact: true });
+  await expect(ghostToggle).toHaveAttribute('aria-pressed', 'false');
+  await ghostToggle.click();
+  await expect(ghostToggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.welcome__eyebrow')).toHaveText(/Ghost chat/);
+  await page.getByLabel('Message amalgam').fill('Ghost tab conversation'); await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.locator('.prose').first()).toContainText('You asked: Ghost tab conversation');
+  await expect(tabs.getByRole('tab', { name: /Ghost tab conversation/ })).toHaveAttribute('aria-selected', 'true');
+  expect(page.url()).not.toContain('?c=');
+  // Once it has a message the choice is made: the toggle is a mark now, and the ghost still answers.
+  await expect(ghostToggle).toHaveCount(0);
+  await expect(page.getByRole('img', { name: 'Ghost chat' })).toBeVisible();
+  await page.getByLabel('Message amalgam').fill('Ghost follow-up'); await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.locator('.prose').nth(1)).toContainText('You asked: Ghost follow-up');
+  // Not in the archive, not on the server, not in this browser's storage.
+  await page.getByRole('button', { name: 'Chats', exact: true }).click();
+  await expect(page.locator('.rowwrap').filter({ hasText: 'Ghost tab conversation' })).toHaveCount(0);
+  await page.keyboard.press('Escape');
+  const conversations = await (await page.request.get('/api/conversations')).json();
+  expect(conversations.some((c: { title: string }) => /Ghost/.test(c.title))).toBe(false);
+  expect(await page.evaluate(() => JSON.stringify(sessionStorage))).not.toContain('Ghost');
+  // A reload brings back the blank ghost tab, never the chat; closing that leaves an ordinary blank tab.
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Where shall we begin?' })).toBeVisible();
+  await expect(tabs.getByRole('tab')).toHaveCount(1);
+  await expect(ghostToggle).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.bubble')).toHaveCount(0);
+  await tabs.getByRole('tab', { name: /New chat/ }).hover();
+  await page.getByRole('button', { name: 'Close New chat' }).click();
+  await expect(tabs.getByRole('tab')).toHaveCount(1);
+  await expect(ghostToggle).toHaveAttribute('aria-pressed', 'false');
+  await expect(tabs.getByRole('button', { name: 'Close New chat' })).toHaveCount(0);
   // Remove this test's chats, keeping repeated local runs deterministic.
   const bootstrap = await (await page.request.get('/api/bootstrap')).json();
   for (const c of bootstrap.conversations.filter((c: { title: string }) => /tab conversation$/.test(c.title))) {

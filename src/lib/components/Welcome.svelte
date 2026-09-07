@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
-	import { Folder } from '@lucide/svelte';
+	import { Folder, Ghost } from '@lucide/svelte';
 	import Composer from './Composer.svelte';
 	import { workspace } from '$lib/state/workspace.svelte';
 	import { ui } from '$lib/state/ui.svelte';
@@ -9,7 +9,9 @@
 	/*
 	 * The empty state — the composer in the middle of the page with a line
 	 * above it, the way a new conversation opens everywhere else. Inside a
-	 * project the line is the project's name, and what it carries.
+	 * project the line is the project's name, and what it carries. A ghost
+	 * chat says so in the greeting's place, and in one sentence what that
+	 * means, so nobody types anything here believing it will be kept.
 	 */
 
 	let hello = $state('');
@@ -35,9 +37,15 @@
 					{workspace.project.instructions ? 'Its instructions accompany every response here.' : 'No instructions yet — add some to give every chat here a shared starting point.'}
 					<button type="button" class="welcome__edit" onclick={() => ui.editProject(workspace.project!.id)}>Edit</button>
 				</p>
+			{:else if workspace.ghost}
+				<p class="welcome__eyebrow"><Ghost size={13} strokeWidth={1.75} /> Ghost chat</p>
+				<h1 class="welcome__title">Where shall we begin?</h1>
 			{:else}
 				<p class="welcome__eyebrow">{hello}</p>
 				<h1 class="welcome__title">Where shall we begin?</h1>
+			{/if}
+			{#if workspace.ghost}
+				<p class="welcome__lede">Not saved. This chat lives in its tab and is gone when the tab closes or the page reloads.</p>
 			{/if}
 		</header>
 

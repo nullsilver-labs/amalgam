@@ -8,6 +8,12 @@
  * sessions and forwards the active one's fields under the names components
  * have always read — `workspace.messages` is the active tab's messages.
  *
+ * A tab may be a ghost chat: one that is written nowhere — not the database,
+ * not this browser's storage. It lives in the tab that holds it and is gone
+ * when that tab closes or the page reloads; every message sends the whole
+ * chat, since the server keeps none of it. A blank tab can become one, and
+ * a ghost is a ghost from its first message on.
+ *
  * Client-only: `boot()` runs from the page's onMount, and every method
  * assumes a browser (fetch, sessionStorage, the router).
  */
@@ -16,7 +22,7 @@ import { replaceState } from '$app/navigation';
 import { api } from '$lib/api';
 import { eventData } from '$lib/sse';
 import { copyText } from '$lib/clipboard';
-import { DEFAULT_SETTINGS, type Bootstrap, type ChatEvent, type ChatSettings, type ContextInfo, type Conversation, type CorpusDiagnostic, type CorpusSearchResult, type DeviceSession, type IntegrationToken, type Message, type Project, type Scope, type SelectedSource } from '$lib/types';
+import { DEFAULT_SETTINGS, GHOST_HISTORY_TURNS, type Bootstrap, type ChatEvent, type ChatSettings, type ContextInfo, type Conversation, type CorpusDiagnostic, type CorpusSearchResult, type DeviceSession, type HistoryTurn, type IntegrationToken, type Message, type Project, type Scope, type SelectedSource } from '$lib/types';
 import { prefs } from './prefs.svelte';
 
 const EMPTY: Bootstrap = {
@@ -25,9 +31,14 @@ const EMPTY: Bootstrap = {
   settings: DEFAULT_SETTINGS
 };
 
-/** Open tabs survive a reload of this browser tab, like drafts do. */
+/** Open tabs survive a reload of this browser tab, like drafts do. A ghost tab survives as a blank one. */
 const TABS_KEY = 'amalgam:tabs';
 const MAX_TABS = 20;
+
+/** What a ghost request carries of the turns before it: the newest, as far back as the server reads. */
+export function historyOf(thread: Message[]): HistoryTurn[] {
+  return thread.slice(-GHOST_HISTORY_TURNS).map(m => ({ role: m.role, content: m.content, status: m.status }));
+}
 
 export function messageOf(err: unknown): string {
   return err instanceof Error ? err.message : 'The connection failed. Try again.';
@@ -99,12 +110,16 @@ export class Session {
   focusTick = $state(0);
   /** When the response this tab is writing was accepted — what "Thinking for 12s" counts from. */
   startedAt = $state(0);
+  /** A ghost chat: held in this tab alone, written nowhere, gone when the tab closes or the page reloads. */
+  ghost = $state(false);
 
   /** The branch being read, root first: what the transcript shows and a new message follows. */
   thread = $derived(threadOf(this.messages, this.leafId));
   /** A response is being written — by this tab or, after a reload, by nobody. */
   streaming = $derived(this.messages.some(m => m.status === 'streaming'));
   title = $derived(this.conversation?.title ?? 'New chat');
+  /** Nothing in it yet: no conversation, no messages, nothing on its way. */
+  fresh = $derived(!this.conversation && !this.messages.length && !this.busy && !this.loading);
 
   #requestVersion = 0;
   #generation: AbortController | undefined;
@@ -127,13 +142,20 @@ export class Session {
   #scope() { return this.conversation?.id || this.projectId || 'new'; }
   #draftKey() { return `amalgam:draft:${this.#scope()}`; }
   #sourcesKey() { return `amalgam:sources:${this.#scope()}`; }
+  /* A ghost tab's draft stays in memory with the rest of it: nothing below touches storage for one. */
   rememberDraft() {
+    if (this.ghost) return;
     try {
       sessionStorage.setItem(this.#draftKey(), this.draft);
       sessionStorage.setItem(this.#sourcesKey(), JSON.stringify($state.snapshot(this.sources)));
     } catch { /* storage may be disabled */ }
   }
+  /** Take what was typed here out of storage — it goes on with the tab as it becomes a ghost. */
+  forgetDraft() {
+    try { sessionStorage.removeItem(this.#draftKey()); sessionStorage.removeItem(this.#sourcesKey()); } catch { /* storage may be disabled */ }
+  }
   restoreDraft() {
+    if (this.ghost) return;
     try { this.draft = sessionStorage.getItem(this.#draftKey()) || ''; } catch { this.draft = ''; }
     try {
       const stored = JSON.parse(sessionStorage.getItem(this.#sourcesKey()) || '[]');
@@ -159,6 +181,7 @@ export class Session {
     try {
       const result = await api<{ conversation: Conversation; messages: Message[] }>(`/api/conversations/${id}`);
       if (version !== this.#requestVersion) return false;
+      this.ghost = false;
       this.conversation = result.conversation; this.messages = result.messages; this.projectId = this.conversation.project_id;
       this.leafId = result.conversation.leaf_id ?? null;
       this.contextInfo = null; this.loaded = true; this.restoreDraft();
@@ -171,7 +194,7 @@ export class Session {
     finally { if (version === this.#requestVersion) this.loading = false; }
   }
 
-  /** A blank conversation, optionally scoped to a project. */
+  /** A blank conversation, optionally scoped to a project. A ghost tab stays a ghost: that was chosen, and a scope does not unchoose it. */
   blank(scope: string | null) {
     ++this.#requestVersion;
     if (this.loaded) this.rememberDraft();
@@ -194,7 +217,8 @@ export class Session {
     const target = siblings[siblings.findIndex(m => m.id === message.id) + steps];
     if (!target) return;
     this.leafId = tipOf(this.messages, target).id;
-    // Remembered on the server, so this branch is the one open everywhere.
+    // A ghost is read here alone; a saved chat's branch is remembered on the server, so it is the one open everywhere.
+    if (this.ghost) { this.conversation = { ...this.conversation, leaf_id: this.leafId }; return; }
     try { this.conversation = await api<Conversation>(`/api/conversations/${this.conversation.id}`, { method: 'PATCH', body: JSON.stringify({ leafId: this.leafId }) }); }
     catch (err) { this.problem = messageOf(err); }
   }
@@ -205,21 +229,45 @@ export class Session {
     // Sent by id: the server resolves them against the one library it was
     // configured with, so nothing here can point it somewhere else.
     const sources = this.sources.map(s => s.id);
+    if (this.ghost) {
+      // The server holds nothing of a ghost: the branch being read goes with the message.
+      await this.#run({
+        ghost: true, ...(this.conversation ? { conversationId: this.conversation.id } : {}), projectId: this.projectId, model: this.model, text,
+        ...(sources.length ? { sources } : {}), history: historyOf(this.thread)
+      }, { clear: true });
+      return;
+    }
     await this.#run({
       conversationId: this.conversation?.id, projectId: this.projectId, model: this.model, text,
       ...(sources.length ? { sources } : {}), ...(this.conversation && this.leafId ? { parentId: this.leafId } : {})
-    }, true);
+    }, { clear: true });
   }
 
   /** Answer the message before `message` again, beside it, with this tab's model. */
   async regenerate(message: Message) {
     if (!this.conversation || !workspace.ready || this.loading || this.busy || this.streaming) return;
     if (!workspace.data.models.some(m => m.id === this.model)) return;
-    await this.#run({ conversationId: this.conversation.id, model: this.model, regenerate: message.id }, false);
+    if (this.ghost) {
+      // The same question, sent again with the turns before it: the server names nothing, so the tab finds the message itself.
+      const asked = this.messages.find(m => m.id === message.parent_id);
+      const at = asked ? this.thread.findIndex(m => m.id === asked.id) : -1;
+      if (!asked || asked.role !== 'user' || at < 0) return;
+      const sources = asked.sources?.map(s => s.id) ?? [];
+      await this.#run({
+        ghost: true, conversationId: this.conversation.id, projectId: this.projectId, model: this.model, text: asked.content,
+        ...(sources.length ? { sources } : {}), history: historyOf(this.thread.slice(0, at))
+      }, { again: asked });
+      return;
+    }
+    await this.#run({ conversationId: this.conversation.id, model: this.model, regenerate: message.id }, {});
   }
 
-  /** One request to /api/chat, streamed into this tab. `clear` empties the composer once the request is taken. */
-  async #run(body: Record<string, unknown>, clear: boolean) {
+  /**
+   * One request to /api/chat, streamed into this tab. `clear` empties the
+   * composer once the request is taken; `again` is the user message a ghost
+   * chat is having answered again, which the reply is linked under.
+   */
+  async #run(body: Record<string, unknown>, { clear = false, again = null as Message | null }) {
     this.busy = true; this.problem = '';
     let accepted = false, terminal = false;
     let assistantId = '';
@@ -241,17 +289,32 @@ export class Session {
           // The request was taken, so the composer empties — attached sources
           // included. A refusal leaves both where they were, to send again.
           if (clear) { this.draft = ''; this.sources = []; this.rememberDraft(); }
-          this.conversation = event.conversation; this.projectId = this.conversation.project_id;
+          if (this.ghost) {
+            // Nothing was written down: the tab links what came back into its own tree,
+            // under the question asked again or after the end of the branch being read.
+            const user = again ?? { ...event.user, parent_id: this.leafId };
+            const assistant = { ...event.assistant, parent_id: user.id };
+            this.messages = [...this.messages, ...(again ? [] : [user]), assistant];
+            // The first answer names the chat; later ones only move its end.
+            this.conversation = this.conversation
+              ? { ...this.conversation, updated_at: event.conversation.updated_at, leaf_id: assistant.id }
+              : event.conversation;
+          } else {
+            this.conversation = event.conversation;
+            // A regeneration's user message is already here; only what is new is added.
+            const fresh = [event.user, event.assistant].filter(m => !this.messages.some(x => x.id === m.id));
+            this.messages = [...this.messages, ...fresh];
+          }
+          this.projectId = this.conversation.project_id;
           this.#modelConversationId = this.conversation.id;
           this.rememberDraft();
-          // A regeneration's user message is already here; only what is new is added.
-          const fresh = [event.user, event.assistant].filter(m => !this.messages.some(x => x.id === m.id));
-          this.messages = [...this.messages, ...fresh];
           this.leafId = event.assistant.id; assistantId = event.assistant.id;
           this.startedAt = Date.now();
           this.contextInfo = event.context;
-          workspace.data.conversations = [this.conversation, ...workspace.data.conversations.filter(c => c.id !== this.conversation!.id)];
-          if (workspace.active === this) replaceState(`/?c=${this.conversation.id}`, {});
+          if (!this.ghost) {
+            workspace.data.conversations = [this.conversation, ...workspace.data.conversations.filter(c => c.id !== this.conversation!.id)];
+            if (workspace.active === this) replaceState(`/?c=${this.conversation.id}`, {});
+          }
         } else if (event.type === 'thinking') {
           const m = written();
           if (m) { if (m.thinking === null) m.thinking = ''; m.thinking += event.text; }
@@ -283,8 +346,8 @@ export class Session {
     catch (err) { this.problem = messageOf(err); this.#generation?.abort(); }
   }
 
-  /** Re-fetch the open conversation — after a reload found a stranded response. */
-  async reload() { if (this.conversation) await this.load(this.conversation.id); }
+  /** Re-fetch the open conversation — after a reload found a stranded response. A ghost has nothing to fetch. */
+  async reload() { if (this.conversation && !this.ghost) await this.load(this.conversation.id); }
 }
 
 class Workspace {
@@ -338,6 +401,20 @@ class Workspace {
   toggleSource(source: SelectedSource) { this.active.toggleSource(source); }
   removeSource(id: string) { this.active.removeSource(id); }
 
+  /** The active tab is a ghost chat. */
+  get ghost() { return this.active.ghost; }
+  /** Only a tab with nothing in it yet can become a ghost or stop being one: what a chat is, it is from its first message. */
+  canToggleGhost = $derived(this.active.fresh);
+
+  /** Make the blank active tab a ghost chat, or a saved one again. Its draft goes with it either way. */
+  toggleGhost() {
+    const s = this.active;
+    if (!s.fresh) return;
+    if (s.ghost) { s.ghost = false; s.rememberDraft(); }
+    else { s.forgetDraft(); s.ghost = true; }
+    s.focus();
+  }
+
   /* corpus, read-only and server-side: the browser asks amalgam, amalgam asks corpus. */
 
   /** The diagnostic. `refresh` is the "Check now" button, asking past the server's half-minute cache. */
@@ -386,14 +463,16 @@ class Workspace {
     try {
       const raw = sessionStorage.getItem(TABS_KEY);
       if (!raw) return;
-      const stored = JSON.parse(raw) as { tabs: { id: string | null; title?: string; project: string | null; model?: string }[]; active: number };
+      const stored = JSON.parse(raw) as { tabs: { id: string | null; title?: string; project: string | null; model?: string; ghost?: boolean }[]; active: number };
       if (!Array.isArray(stored.tabs) || !stored.tabs.length) return;
       const seen = new Set<string>();
       const sessions: Session[] = [];
       for (const t of stored.tabs.slice(0, MAX_TABS)) {
         if (t.id && seen.has(t.id)) continue;
         const s = new Session(this.active.model);
-        if (t.id) {
+        // A ghost comes back as the blank ghost tab it began as: what it held was never stored.
+        if (t.ghost === true) { s.ghost = true; s.projectId = t.project ?? null; }
+        else if (t.id) {
           seen.add(t.id);
           s.conversation = this.data.conversations.find(c => c.id === t.id) ?? stub(t.id, t.title || 'Conversation', t.project ?? null);
           s.projectId = s.conversation.project_id;
@@ -407,9 +486,11 @@ class Workspace {
     } catch { /* corrupt storage — one blank tab */ }
   }
 
-  /** Called from an effect on the page, so it runs whenever the tabs change. */
+  /** Called from an effect on the page, so it runs whenever the tabs change. A ghost tab is stored as its place and scope, never its chat. */
   persistTabs() {
-    const tabs = this.sessions.map(s => ({ id: s.conversation?.id ?? null, title: s.conversation?.title, project: s.projectId, model: s.rememberedModel }));
+    const tabs = this.sessions.map(s => s.ghost
+      ? { id: null, project: s.projectId, model: s.rememberedModel, ghost: true }
+      : { id: s.conversation?.id ?? null, title: s.conversation?.title, project: s.projectId, model: s.rememberedModel });
     const active = this.activeIndex;
     if (!this.tabsReady) return;
     try { sessionStorage.setItem(TABS_KEY, JSON.stringify({ tabs, active })); } catch { /* storage may be disabled */ }
@@ -420,7 +501,7 @@ class Workspace {
     const s = this.sessions.find(t => t.key === key);
     if (!s) return;
     this.activeKey = key;
-    replaceState(s.conversation ? `/?c=${s.conversation.id}` : '/', {});
+    replaceState(s.conversation && !s.ghost ? `/?c=${s.conversation.id}` : '/', {});
     if (!s.loaded) {
       if (s.conversation) await s.load(s.conversation.id);
       else { s.loaded = true; s.restoreDraft(); }
@@ -450,24 +531,24 @@ class Workspace {
     await this.activate(s.key);
   }
 
-  /** Close a tab. A response it is writing stops, as it would if the page closed. Closing the last chat leaves a blank tab; a lone blank tab has nothing to close. */
+  /** Close a tab. A response it is writing stops, as it would if the page closed; a ghost chat is gone with it. Closing the last chat leaves a blank tab; a lone blank tab has nothing to close. */
   closeTab(key: string) {
     const index = this.sessions.findIndex(s => s.key === key);
     if (index < 0) return;
     const s = this.sessions[index];
-    if (this.sessions.length === 1 && !s.conversation && !s.messages.length) return;
+    if (this.sessions.length === 1 && s.fresh && !s.ghost) return;
     const [closed] = this.sessions.splice(index, 1);
     closed.abort();
     if (!this.sessions.length) this.sessions.push(new Session(closed.model));
     if (this.activeKey === key) void this.activate(this.sessions[Math.min(index, this.sessions.length - 1)].key);
   }
 
-  /** Open a conversation in the active tab — or switch to the tab that has it. A tab that is writing keeps its place: the conversation opens beside it. */
+  /** Open a conversation in the active tab — or switch to the tab that has it. A tab that is writing, or a ghost chat with anything in it, keeps its place: the conversation opens beside it. */
   async open(id: string) {
     const holder = this.holder(id);
     // Activating also fetches a restored tab that has not shown its content yet.
     if (holder) { await this.activate(holder.key); return; }
-    if (this.active.busy) { await this.openTab(id); return; }
+    if (this.active.busy || (this.active.ghost && !this.active.fresh)) { await this.openTab(id); return; }
     const s = this.active;
     if (await s.load(id) && this.active === s) { replaceState(`/?c=${id}`, {}); s.focus(); }
   }
@@ -475,8 +556,7 @@ class Workspace {
   /** A blank conversation, optionally scoped to a project. A tab that is already blank takes it (rescoped); any other — a chat being read or written — keeps its place, and the blank one opens in a tab beside it. */
   newChat(scope: string | null = null) {
     const s = this.active;
-    const fresh = !s.conversation && !s.messages.length && !s.busy && !s.loading;
-    if (!fresh) { void this.newTab(scope); return; }
+    if (!s.fresh) { void this.newTab(scope); return; }
     s.blank(scope);
     replaceState('/', {});
     s.focus();
@@ -497,23 +577,26 @@ class Workspace {
   switchBranch(message: Message, steps: number) { return this.active.switchBranch(message, steps); }
 
   async rename(id: string, title: string) {
-    const updated = await api<Conversation>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
     const holder = this.holder(id);
+    // A ghost's name is the tab's alone.
+    if (holder?.ghost && holder.conversation) { holder.conversation = { ...holder.conversation, title }; return; }
+    const updated = await api<Conversation>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
     if (holder) holder.conversation = updated;
     await this.refresh();
   }
 
+  /** Delete a conversation. Deleting a ghost chat forgets it, as closing its tab would; the tab stays, blank and still a ghost. */
   async remove(id = this.current?.id) {
     if (!id) return;
     const holder = this.holder(id);
     if (holder?.busy) return;
-    await api(`/api/conversations/${id}`, { method: 'DELETE' });
+    if (!holder?.ghost) await api(`/api/conversations/${id}`, { method: 'DELETE' });
     if (holder) {
       holder.draft = ''; holder.sources = []; holder.rememberDraft();
       holder.blank(holder.projectId);
       if (holder === this.active) replaceState('/', {});
     }
-    await this.refresh();
+    if (!holder?.ghost) await this.refresh();
   }
 
   async saveProject(id: string | null, name: string, instructions: string): Promise<Project> {

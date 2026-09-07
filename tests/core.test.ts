@@ -179,6 +179,19 @@ describe('chat input', () => {
     expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other, parentId: uuid }).success).toBe(false);
     expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: 'nope' }).success).toBe(false);
   });
+  it('lets a ghost chat carry its own history and text, and nothing that names a row', () => {
+    const history = [{ role: 'user', content: 'q' }, { role: 'assistant', content: 'a', status: 'complete' }];
+    expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history: [] }).success).toBe(true);
+    expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history, conversationId: uuid, sources: ['a'] }).success).toBe(true);
+    expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi' }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ ghost: true, model: 'x', history }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history, parentId: other }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history, regenerate: other }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history: [{ role: 'system', content: 'no' }] }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ ghost: false, model: 'x', text: 'hi' }).success).toBe(false);
+    // A saved chat's history is on the server; the browser sends none.
+    expect(chatInputSchema.safeParse({ model: 'x', text: 'hi', history }).success).toBe(false);
+  });
 });
 describe('markdown safety', () => {
   it('renders headings, lists and code', () => { const html = renderMarkdown('# Hello\n\n- a\n\n```js\nalert(1)\n```'); expect(html).toContain('<h1>Hello</h1>'); expect(html).toContain('language-js'); });

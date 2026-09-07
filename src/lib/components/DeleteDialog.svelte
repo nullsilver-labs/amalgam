@@ -6,6 +6,7 @@
 	import { ui } from '$lib/state/ui.svelte';
 
 	const target = $derived(ui.target ?? workspace.current);
+	const ghost = $derived(!!workspace.holder(target?.id)?.ghost);
 	let deleting = $state(false);
 	let error = $state('');
 
@@ -21,7 +22,11 @@
 <Dialog title="Delete conversation?" onclose={() => ui.close()}>
 	<div class="body">
 		{#if error}<Notice ondismiss={() => (error = '')}>{error}</Notice>{/if}
-		<p class="text">“{target?.title}” and every message in it will be permanently removed from this instance.</p>
+		{#if ghost}
+			<p class="text">“{target?.title}” is a ghost chat: it was never saved. Deleting it forgets it now, as closing its tab would.</p>
+		{:else}
+			<p class="text">“{target?.title}” and every message in it will be permanently removed from this instance.</p>
+		{/if}
 		<div class="actions">
 			<Button variant="ghost" size="md" onclick={() => ui.close()} disabled={deleting}>Keep conversation</Button>
 			<Button size="md" onclick={remove} disabled={deleting || !!workspace.holder(target?.id)?.busy}>Delete conversation</Button>
