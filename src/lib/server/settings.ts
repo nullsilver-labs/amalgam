@@ -12,6 +12,7 @@ export const chatSettingsSchema = z.object({
   systemPrompt: z.string().max(12000),
   // Defaulted, so a row saved before the budget existed still reads whole.
   contextTokens: z.number().int().min(1000).max(2_000_000).default(DEFAULT_CONTEXT_TOKENS),
+  thinking: z.boolean().default(true),
   suggestions: z.array(z.object({ label: z.string().trim().min(1).max(40), text: z.string().max(2000) })).max(8)
 });
 

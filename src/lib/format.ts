@@ -49,3 +49,9 @@ export function modifier(): string {
 export function formatTokens(n: number): string {
   return n >= 1000 ? `${Math.round(n / 1000)}k` : String(n);
 }
+
+/** How long a model worked: "4s", "1m 12s". Never less than a second — it did something. */
+export function formatDuration(ms: number): string {
+  const s = Math.max(1, Math.round(ms / 1000));
+  return s < 60 ? `${s}s` : `${Math.floor(s / 60)}m ${s % 60}s`;
+}

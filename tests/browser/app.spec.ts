@@ -149,7 +149,9 @@ test('context budget: set in Settings, bounded by a declared window, reported pe
   await dialog.getByRole('button', { name: 'Chat', exact: true }).click();
   const budget = dialog.getByLabel('Context budget in tokens');
   await expect(budget).toHaveValue('32000');
-  await budget.fill('24000');
+  // Below what the fixture's 32k window leaves after the reply's room — 8k
+  // with thinking on — so the ceiling is the number that comes back.
+  await budget.fill('20000');
   await dialog.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(dialog.getByRole('status')).toHaveText('Saved');
   // The fixture model is declared with a 32k window in compose.test.yaml.
@@ -161,7 +163,7 @@ test('context budget: set in Settings, bounded by a declared window, reported pe
   await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
   await expect(page.locator('.prose h2')).toHaveText('A little clarity');
   await page.getByRole('button', { name: 'What the model sees' }).click();
-  await expect(page.getByRole('dialog')).toContainText('of 24,000 tokens');
+  await expect(page.getByRole('dialog')).toContainText('of 20,000 tokens');
   await expect(page.getByRole('dialog')).toContainText('32,000 tokens, declared');
   await expect(page.getByRole('dialog')).toContainText('Everything fit');
   await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
@@ -237,6 +239,66 @@ test('tabs: the strip is always there, a new chat opens beside the one you are i
   for (const c of bootstrap.conversations.filter((c: { title: string }) => /tab conversation$/.test(c.title))) {
     await page.request.delete(`/api/conversations/${c.id}`, { headers: { Origin: origin } });
   }
+  expect(errors).toEqual([]);
+});
+
+test('thinking is shown above an answer, and an answer generated again becomes a branch', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', err => errors.push(err.message));
+  await signIn(page);
+  // A model that reasons first: one bare line above the answer says how long it worked, and opens what it showed.
+  await page.getByLabel('Message amalgam').fill('[think] Show your work'); await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
+  const worked = page.getByRole('button', { name: /^Worked for \d+s$/ });
+  await expect(worked).toBeVisible();
+  await expect(page.getByText('Considering the question.', { exact: false })).toHaveCount(0);
+  await worked.click();
+  await expect(page.getByText('Considering the question.', { exact: false })).toBeVisible();
+  await expect(page.locator('.prose h2').last()).toHaveText('A little clarity');
+  // The same line survives a reload, from the row.
+  await page.reload();
+  await expect(page.getByRole('button', { name: /^Worked for \d+s$/ })).toBeVisible();
+  // Reasoning left inside the text between <think> tags is told apart from the answer.
+  await page.getByLabel('Message amalgam').fill('[think-tags] and again'); await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: /^Worked for \d+s$/ })).toHaveCount(2);
+  await expect(page.locator('.prose', { hasText: '<think>' })).toHaveCount(0);
+  await page.getByRole('button', { name: /^Worked for \d+s$/ }).last().click();
+  await expect(page.getByText('Tagged reasoning, split across chunks.')).toBeVisible();
+  // Answer again, with another model: the new answer sits beside the first, and the composer follows the model.
+  await expect(page.locator('.bubble')).toHaveCount(2);
+  await page.getByRole('button', { name: 'Regenerate' }).last().click();
+  await page.getByRole('option', { name: /alpha-small/ }).click();
+  await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
+  await expect(page.getByText('2 / 2')).toBeVisible();
+  await expect(page.locator('.model').last()).toHaveText('alpha-small');
+  await expect(page.getByRole('combobox', { name: 'Model' })).toContainText('alpha-small');
+  await page.getByRole('button', { name: 'Previous branch' }).click();
+  await expect(page.getByText('1 / 2')).toBeVisible();
+  await expect(page.locator('.model').last()).toHaveText('fixture-text');
+  // The branch being read is remembered on the server: a reload opens the same one.
+  await page.reload();
+  await expect(page.getByText('1 / 2')).toBeVisible();
+  await expect(page.locator('.model').last()).toHaveText('fixture-text');
+  // A new message continues the branch being read; the other branch keeps its own end.
+  await page.getByLabel('Message amalgam').fill('Continue the first branch'); await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
+  await expect(page.locator('.bubble')).toHaveCount(3);
+  await page.getByRole('button', { name: 'Next branch' }).click();
+  await expect(page.getByText('2 / 2')).toBeVisible();
+  await expect(page.locator('.bubble')).toHaveCount(2);
+  // Every branch is exported, with its parent links.
+  const downloadPromise = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Conversation menu' }).click();
+  await page.getByRole('menuitem', { name: 'Export as JSON' }).click();
+  let exported = ''; for await (const chunk of (await (await downloadPromise).createReadStream())!) exported += chunk;
+  const tree = JSON.parse(exported);
+  expect(tree.messages).toHaveLength(7);
+  expect(tree.messages.filter((m: { parent_id: string | null }) => m.parent_id === null)).toHaveLength(1);
+  // Remove this test's chat, keeping repeated local runs deterministic.
+  await page.getByRole('button', { name: 'Conversation menu' }).click();
+  await page.getByRole('menuitem', { name: 'Delete' }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Delete conversation', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Where shall we begin?' })).toBeVisible();
   expect(errors).toEqual([]);
 });
 

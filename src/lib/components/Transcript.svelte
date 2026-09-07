@@ -38,6 +38,7 @@
 	$effect(() => {
 		const last = workspace.messages[workspace.messages.length - 1];
 		last?.content;
+		last?.thinking; // an open thinking pane grows as it streams
 		last?.status; // the action row appears when a response completes
 		workspace.messages.length;
 		if (stick) void tick().then(() => { if (scroller) { scroller.scrollTop = scroller.scrollHeight; atBottom = true; } });
@@ -48,7 +49,7 @@
 	<div class="transcript__scroll" bind:this={scroller} onscroll={measure}>
 		<section class="transcript__column" aria-label="Conversation">
 			{#each workspace.messages as message, index (message.id)}
-				<Message {message} last={index === workspace.messages.length - 1} />
+				<Message {message} last={index === workspace.messages.length - 1} startedAt={index === workspace.messages.length - 1 && workspace.busy ? workspace.active.startedAt : 0} />
 			{/each}
 			{#if workspace.streaming && !workspace.busy}
 				<p class="transcript__stale">

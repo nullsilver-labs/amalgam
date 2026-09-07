@@ -2,12 +2,20 @@ export type MessageStatus = 'complete' | 'streaming' | 'cancelled' | 'failed' | 
 export interface Project { id: string; name: string; instructions: string; created_at: string }
 export interface Conversation {
   id: string; title: string; project_id: string | null; created_at: string; updated_at: string;
+  /** The message the conversation was last read at — the end of the branch that opens. Null until the first exchange. */
+  leaf_id: string | null;
 }
 export interface Message {
   id: string; conversation_id: string; role: 'user' | 'assistant'; content: string;
   status: MessageStatus; model: string | null; error: string | null; created_at: string;
   /** For a user message: the corpus cards whose text was quoted ahead of it. Null for every other message. */
   sources: MessageSource[] | null;
+  /** The message this one follows; null at the root. Messages sharing a parent are branches — a regenerated answer beside the first. */
+  parent_id: string | null;
+  /** For an assistant message: the reasoning the model showed before its answer, '' when it reported thinking but showed none, null when it reported none. */
+  thinking: string | null;
+  /** Milliseconds from the request to the first character of the answer. Kept only when the model reported thinking. */
+  thinking_ms: number | null;
 }
 /** One corpus card as a sent message remembers it — enough to name and link it after a reload. */
 export interface MessageSource {
@@ -19,13 +27,19 @@ export interface MessageSource {
 export interface ModelOption { id: string; name: string; provider: string; destination: string; window: number | null }
 /** A pill under the composer on a new chat: its label, and what it drops into the composer. */
 export interface Suggestion { label: string; text: string }
-/** Instance-wide chat settings, stored on the server and editable in Settings. */
-export interface ChatSettings { systemPrompt: string; suggestions: Suggestion[]; contextTokens: number }
+/**
+ * Instance-wide chat settings, stored on the server and editable in Settings.
+ * `thinking` asks models to think before answering: Claude models are sent
+ * adaptive thinking with a shown summary, and every reply keeps extra room
+ * for it. Reasoning a model sends of its own accord is shown either way.
+ */
+export interface ChatSettings { systemPrompt: string; suggestions: Suggestion[]; contextTokens: number; thinking: boolean }
 /** The instance's context ceiling until Settings says otherwise: estimated tokens a request may carry. */
 export const DEFAULT_CONTEXT_TOKENS = 32_000;
 export const DEFAULT_SETTINGS: ChatSettings = {
   systemPrompt: '',
   contextTokens: DEFAULT_CONTEXT_TOKENS,
+  thinking: true,
   suggestions: [
     { label: 'Draft something', text: 'Help me draft ' },
     { label: 'Think it through', text: 'Help me think through a decision. Ask me what I am weighing up.' },
@@ -100,5 +114,7 @@ export interface ChatTurn { role: 'system' | 'user' | 'assistant'; content: stri
 export type ChatEvent =
   | { type: 'start'; conversation: Conversation; user: Message; assistant: Message; context: ContextInfo }
   | { type: 'delta'; text: string }
-  | { type: 'done'; status: MessageStatus; error?: string }
+  /** Reasoning, as the model shows it. Sent with empty text when a model reports thinking without showing any. */
+  | { type: 'thinking'; text: string }
+  | { type: 'done'; status: MessageStatus; error?: string; thinking_ms?: number }
   | { type: 'error'; error: string };

@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { ChevronDown } from '@lucide/svelte';
-	import Menu, { type MenuEntry } from './Menu.svelte';
+	import Menu from './Menu.svelte';
 	import { workspace } from '$lib/state/workspace.svelte';
-	import { formatTokens } from '$lib/format';
+	import { modelEntries } from '$lib/model-entries';
 
 	/*
 	 * The model picker — a quiet pill in the composer's bottom row that opens
@@ -12,15 +12,7 @@
 
 	let open = $state(false);
 
-	const entries = $derived.by<MenuEntry[]>(() => {
-		const out: MenuEntry[] = [];
-		let provider = '';
-		for (const m of workspace.data.models) {
-			if (m.provider !== provider) { provider = m.provider; out.push({ id: `head:${provider}`, heading: provider }); }
-			out.push({ id: m.id, label: m.name, hint: m.window ? `${m.destination} · ${formatTokens(m.window)}` : m.destination, selected: m.id === workspace.model, onselect: () => workspace.chooseModel(m.id) });
-		}
-		return out;
-	});
+	const entries = $derived(modelEntries(workspace.data.models, workspace.model, id => workspace.chooseModel(id)));
 </script>
 
 <div class="picker">

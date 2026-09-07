@@ -12,8 +12,17 @@ const server = http.createServer(async (req, res) => {
   const answer = text.includes('[xss]') ? '<img src="https://example.invalid/tracker" onerror="alert(1)"><script>alert(1)</script>\n\n**Safe text** [unsafe](javascript:alert%281%29)'
     : `## A little clarity\n\nThis is a **local test response**, not a real model.\n\n${input.messages[0].content.includes('Italian') ? 'Ciao! Project instructions arrived.\n\n' : ''}You asked: ${text}\n\n- Conversations persist in PostgreSQL.\n- The model connection can be changed.\n\n\`\`\`js\nconst thought = 'a beginning';\n\`\`\``;
   const delay = text.includes('[slow]') ? 180 : 5;
-  for (let i = 0; i < answer.length && !closed; i += 8) {
-    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: answer.slice(i, i + 8) } }] })}\n\n`);
+  // [think] reasons first, the way llama.cpp and vLLM stream it; [think-tags] the way servers that leave <think> in the text do.
+  if (text.includes('[think]')) {
+    const thought = 'Considering the question. The user wants to see a model think before it answers.';
+    for (let i = 0; i < thought.length && !closed; i += 8) {
+      res.write(`data: ${JSON.stringify({ choices: [{ delta: { reasoning_content: thought.slice(i, i + 8) } }] })}\n\n`);
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+  }
+  const body = text.includes('[think-tags]') ? `<think>Tagged reasoning, split across chunks.</think>\n\n${answer}` : answer;
+  for (let i = 0; i < body.length && !closed; i += 8) {
+    res.write(`data: ${JSON.stringify({ choices: [{ delta: { content: body.slice(i, i + 8) } }] })}\n\n`);
     await new Promise(resolve => setTimeout(resolve, delay));
     if (text.includes('[disconnect]') && i > 25) { res.end(); return; }
   }

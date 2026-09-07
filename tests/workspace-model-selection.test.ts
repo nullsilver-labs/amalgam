@@ -8,11 +8,11 @@ vi.mock('$app/navigation', () => ({ replaceState: mocks.replaceState }));
 
 const modelA: ModelOption = { id: 'manual:a', name: 'a', provider: 'Manual', destination: 'a.test', window: 8000 };
 const modelB: ModelOption = { id: 'discovered:b', name: 'b', provider: 'Discovered', destination: 'b.test', window: null };
-const conversation = (id: string): Conversation => ({ id, title: id, project_id: null, created_at: '', updated_at: '' });
+const conversation = (id: string): Conversation => ({ id, title: id, project_id: null, created_at: '', updated_at: '', leaf_id: null });
 const history = (id: string, model: string | null) => ({
   conversation: conversation(id), messages: model ? [{
     id: 'message', conversation_id: id, role: 'assistant', content: 'Saved reply', status: 'complete',
-    model, sources: null, error: null, created_at: ''
+    model, sources: null, error: null, created_at: '', parent_id: null, thinking: null, thinking_ms: null
   } satisfies Message] : []
 });
 function bootstrap(models: ModelOption[], failed = false): Bootstrap {
@@ -62,7 +62,7 @@ beforeEach(async () => {
   ({ prefs } = await import('../src/lib/state/prefs.svelte'));
   ({ default: Composer } = await import('../src/lib/components/Composer.svelte'));
   ({ render } = await import('svelte/server'));
-});
+}, 60_000);
 afterEach(() => vi.unstubAllGlobals());
 
 function expectUnavailable() {

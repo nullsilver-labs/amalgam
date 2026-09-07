@@ -99,6 +99,8 @@ A token is never the owner. It works on `/api/*` only, is ignored outright on pa
 ## What works
 
 - Streaming text chat, stop, saved partial/error responses, and reloadable history.
+- A model's thinking, when it shows any: one line above the answer says how long it worked and opens what it showed. Read from OpenAI-style `reasoning_content`/`reasoning` deltas and from `<think>` tags left in the text; Claude models are asked to think adaptively and show a summary (Settings › Chat › Thinking, on by default; turn it off for Claude Haiku 4.5 and older, which reject it).
+- Answer again, with any model: the new answer is written beside the first, and a ‹ 1 / 2 › under either reads the other branch. A conversation is a tree; the transcript shows one path through it, a new message continues the branch being read, and the branch last read is remembered on the server.
 - Reading your own corpus library: search it from the composer, attach up to five cards to a message, see them quoted with attribution that survives a reload, and be told before excerpts leave this machine. Read-only, server-to-server, only when you ask.
 - OpenAI-compatible and native Anthropic adapters, any number of providers from the environment; switching model between turns.
 - Conversation rename/delete, keyword search across titles and messages, JSON export.
@@ -112,7 +114,7 @@ A token is never the owner. It works on `/api/*` only, is ignored outright on pa
 - Server-side persistence, migrations, healthchecks, nonroot/read-only application container.
 - Drafts and open tabs in this browser tab's session storage; theme, model and layout preferences in local storage. No provider credentials are stored in the browser.
 
-**Not implemented yet:** attachments of your own, ingestion or indexing of anything, vector search inside amalgam, automatic retrieval, web search, images/audio/video, voice, branching/edit/regenerate, durable reconnectable generation jobs, model-account OAuth, agents/MCP, multi-user accounts, document editor, or UI-based connection editing. The corpus connector reads cards you pick; it is not a knowledge base of amalgam's own.
+**Not implemented yet:** attachments of your own, ingestion or indexing of anything, vector search inside amalgam, automatic retrieval, web search, images/audio/video, voice, editing a sent message, durable reconnectable generation jobs, model-account OAuth, agents/MCP, multi-user accounts, document editor, or UI-based connection editing. The corpus connector reads cards you pick; it is not a knowledge base of amalgam's own.
 
 Projects are optional context and organization. They are not required to chat, nor are other project conversations silently added to a request.
 
@@ -160,7 +162,7 @@ This is a **single-user, single-app-instance** release for local/private hosting
 - Database/backup contents are **not encrypted by this app**. Use disk encryption and protect backups. Per-response context snapshots also contain previous prompt text and project instructions.
 - Markdown cannot load remote images or execute scripts. There is no shell, generated-code execution, or tool access.
 
-The server caps input at 16,000 characters and context at the token budget set in Settings (32,000 by default), lowered to a declared model window less the reply's reservation of up to 4,096 tokens; at most 101 recent stored messages are considered. Tokens are **estimated from characters on the conservative side**, not counted by the model's tokenizer, so a model whose window is not declared can still reject an oversized request. Output is capped at 200,000 characters and each generation at three minutes. Failed/partial assistant output is excluded from subsequent model context.
+The server caps input at 16,000 characters and context at the token budget set in Settings (32,000 by default), lowered to a declared model window less the reply's reservation of up to 4,096 tokens — plus 16,384 more for thinking while Settings › Chat › Thinking is on; at most the 101 nearest messages of the branch being read are considered. Tokens are **estimated from characters on the conservative side**, not counted by the model's tokenizer, so a model whose window is not declared can still reject an oversized request. Output is capped at 200,000 characters and each generation at three minutes. Failed/partial assistant output is excluded from subsequent model context.
 
 Generation currently lives with the streaming HTTP request. Closing the page cancels it; stop retains received text. Content checkpoints occur about once per second while deltas arrive. A crash can lose the most recent uncheckpointed delta, never silently invent completion. On restart, unfinished responses become `interrupted`. Only one app process/replica is supported. Refresh is not stream resumption; a running response in another tab must be reloaded to see updates.
 
@@ -202,7 +204,7 @@ Browser tests cover sign-in, hosting and forwarded-header boundaries, token scop
 
 Pinned selectors the browser suite relies on: `.prose`, `.bubble`, `.turn__sources`, `.attached__chip`, `.composer__disclosure`, `.plate`, `.stage > .plate`, `.rowwrap`, `.search-results`, `.devices li`, `.tokens li`, `.tag--on`. Rename one and the suite tells you.
 
-The suite spends nine of the ten sign-ins the instance allows per minute, deliberately: the throttle is real and the tests live inside it. Wait a minute between consecutive runs. Run test commands in a fresh shell or unset the test exports before starting your real instance.
+The suite spends all ten of the sign-ins the instance allows per minute, deliberately: the throttle is real and the tests live inside it. Wait a minute between consecutive runs, and sign in once per test, not more. Run test commands in a fresh shell or unset the test exports before starting your real instance.
 
 ## Upgrading an existing installation
 
@@ -212,6 +214,8 @@ Two things change on the first start of this version, and nothing else needs doi
 - **If you reach amalgam over plain HTTP at anything but localhost, add `AMALGAM_PRIVATE_HTTP=true` to `.env`** (or switch to `compose.private.yaml`, which sets it). Without it the app answers 503 and says so. HTTPS and localhost installations need no change.
 
 The corpus connector adds one nullable column to `messages` on the same start (`schema_version` 3). It stays dormant until you set `CORPUS_BASE_URL` and `CORPUS_TOKEN`: without both, the Sources control is not shown and no request is made to corpus.
+
+Branching (`schema_version` 4) adds `parent_id`, `thinking` and `thinking_ms` to `messages` and `leaf_id` to `conversations`, then threads every existing conversation in the order its messages were written — once, on the first start with this version. Nothing else changes; the migration is additive.
 
 ## Data, fonts, and history
 

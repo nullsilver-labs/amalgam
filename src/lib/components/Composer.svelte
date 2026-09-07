@@ -382,14 +382,16 @@
 		color: var(--color-text-faint);
 	}
 
+	/* Read as often as the link beside it, so it takes the link's colour. */
 	.composer__foot-text {
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
+		color: var(--color-text-subtle);
 	}
 
 	.composer__host {
-		color: var(--color-text-subtle);
+		color: var(--color-text-muted);
 	}
 
 	.composer__foot-link {

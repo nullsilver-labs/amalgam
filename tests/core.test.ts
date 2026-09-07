@@ -1,10 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import { readProviders, publicModels, resolveModel } from '../src/lib/server/config';
 import { deviceLabel, equalSecret, hashSecret, newSecret, requireScope, requireSession, SCOPES, type Principal } from '../src/lib/server/auth';
-import { assembleContext, contextBudget, estimateTokens, MAX_OUTPUT_TOKENS } from '../src/lib/server/context';
+import { assembleContext, chatInputSchema, contextBudget, estimateTokens, MAX_OUTPUT_TOKENS, THINKING_HEADROOM } from '../src/lib/server/context';
 import { renderMarkdown } from '../src/lib/markdown';
 import { eventData } from '../src/lib/sse';
-import { generate, ProviderError } from '../src/lib/server/providers';
+import { generate, ProviderError, ThinkTags, type Piece } from '../src/lib/server/providers';
 import type { Provider } from '../src/lib/server/config';
 
 const provider: Provider = { id: 'compatible', kind: 'openai', name: 'Test', baseUrl: 'http://fixture/v1', apiKey: 'never-public', models: [{ name: 'test-model', window: null }] };
@@ -13,6 +13,10 @@ function stream(text: string, chunk = 3) {
   return new ReadableStream<Uint8Array>({ start(sink) { for (let i = 0; i < bytes.length; i += chunk) sink.enqueue(bytes.slice(i, i + chunk)); sink.close(); } });
 }
 async function collect<T>(input: AsyncIterable<T>) { const result: T[] = []; for await (const part of input) result.push(part); return result; }
+/** The text of every piece a generation yielded, kinds aside. */
+async function texts(input: AsyncIterable<Piece>) { return (await collect(input)).map(p => p.text); }
+const think = (text: string): Piece => ({ kind: 'thinking', text });
+const say = (text: string): Piece => ({ kind: 'text', text });
 function mockResponse(text: string, type = 'text/event-stream'): typeof fetch {
   return (async () => new Response(stream(text), { headers: { 'Content-Type': type } })) as typeof fetch;
 }
@@ -152,6 +156,29 @@ describe('context selection', () => {
     expect(contextBudget(1_000_000, 200000)).toEqual({ input: 176313, output: MAX_OUTPUT_TOKENS });
     expect(contextBudget(32000, 4096)).toEqual({ input: 2764, output: 1024 });
   });
+  it('keeps room for thinking in the reply, within a quarter of a declared window', () => {
+    expect(THINKING_HEADROOM).toBe(16384);
+    expect(contextBudget(32000, null, 16384)).toEqual({ input: 32000, output: 4096 + 16384 });
+    expect(contextBudget(32000, 32000, 16384)).toEqual({ input: Math.min(32000, Math.floor((32000 - 8000) * 0.9)), output: 8000 });
+    expect(contextBudget(32000, 200000, 16384)).toEqual({ input: 32000, output: 4096 + 16384 });
+  });
+});
+describe('chat input', () => {
+  const uuid = '11111111-1111-4111-8111-111111111111', other = '22222222-2222-4222-8222-222222222222';
+  it('needs text for a plain send, and a uuid for the parent it follows', () => {
+    expect(chatInputSchema.safeParse({ model: 'x' }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ model: 'x', text: 'hi' }).success).toBe(true);
+    expect(chatInputSchema.safeParse({ model: 'x', text: 'hi', conversationId: uuid, parentId: other }).success).toBe(true);
+    expect(chatInputSchema.safeParse({ model: 'x', text: 'hi', conversationId: uuid, parentId: 'not-a-uuid' }).success).toBe(false);
+  });
+  it('lets a regeneration carry nothing but the conversation and the answer to redo', () => {
+    expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other }).success).toBe(true);
+    expect(chatInputSchema.safeParse({ model: 'x', regenerate: other }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other, text: 'hi' }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other, sources: ['a'] }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other, parentId: uuid }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: 'nope' }).success).toBe(false);
+  });
 });
 describe('markdown safety', () => {
   it('renders headings, lists and code', () => { const html = renderMarkdown('# Hello\n\n- a\n\n```js\nalert(1)\n```'); expect(html).toContain('<h1>Hello</h1>'); expect(html).toContain('language-js'); });
@@ -172,7 +199,7 @@ describe('provider adapters', () => {
   const turns = [{ role: 'user' as const, content: 'Hi' }];
   it('streams OpenAI-compatible deltas', async () => {
     const fetcher = mockResponse(frame({ choices: [{ delta: { content: 'Hello' } }] }) + 'data: [DONE]\n\n');
-    expect(await collect(generate(provider, 'test-model', turns, new AbortController().signal, { fetcher: fetcher }))).toEqual(['Hello']);
+    expect(await collect(generate(provider, 'test-model', turns, new AbortController().signal, { fetcher: fetcher }))).toEqual([say('Hello')]);
   });
   it('requires explicit completion instead of marking truncated data successful', async () => {
     const fetcher = mockResponse(frame({ choices: [{ delta: { content: 'partial' } }] }));
@@ -194,8 +221,8 @@ describe('provider adapters', () => {
   it('translates Anthropic system instructions, auth and delta events', async () => {
     let sent: RequestInit | undefined;
     const fetcher = (async (_url, init) => { sent = init; return new Response(stream(frame({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Ciao' } }) + frame({ type: 'message_stop' })), { headers: { 'Content-Type': 'text/event-stream' } }); }) as typeof fetch;
-    const result = await collect(generate({ ...provider, kind: 'anthropic' }, 'claude', [{ role: 'system', content: 'Italian' }, ...turns], new AbortController().signal, { fetcher: fetcher }));
-    expect(result).toEqual(['Ciao']); expect(JSON.parse(sent!.body as string).system).toBe('Italian'); expect(JSON.parse(sent!.body as string).max_tokens).toBe(MAX_OUTPUT_TOKENS); expect((sent!.headers as Record<string, string>)['x-api-key']).toBe('never-public');
+    const result = await texts(generate({ ...provider, kind: 'anthropic' }, 'claude', [{ role: 'system', content: 'Italian' }, ...turns], new AbortController().signal, { fetcher: fetcher }));
+    expect(result).toEqual(['Ciao']); expect(JSON.parse(sent!.body as string)).not.toHaveProperty('thinking'); expect(JSON.parse(sent!.body as string).system).toBe('Italian'); expect(JSON.parse(sent!.body as string).max_tokens).toBe(MAX_OUTPUT_TOKENS); expect((sent!.headers as Record<string, string>)['x-api-key']).toBe('never-public');
   });
   it('reports Anthropic output exhaustion and unsupported tool calls', async () => {
     const anthro = mockResponse(frame({ type: 'message_delta', delta: { stop_reason: 'max_tokens' } }));
@@ -216,5 +243,58 @@ describe('provider adapters', () => {
   it('reports stream errors as safe failures', async () => {
     const fetcher = mockResponse(frame({ type: 'error', error: { message: 'private-detail' } }));
     await expect(collect(generate(provider, 'test-model', turns, new AbortController().signal, { fetcher: fetcher }))).rejects.toBeInstanceOf(ProviderError);
+  });
+  it('tells OpenAI-style reasoning deltas apart from the answer, under either name', async () => {
+    const fetcher = mockResponse(
+      frame({ choices: [{ delta: { reasoning_content: '' } }] }) + frame({ choices: [{ delta: { reasoning_content: 'why' } }] })
+      + frame({ choices: [{ delta: { reasoning: ' not' } }] }) + frame({ choices: [{ delta: { reasoning: null, content: 'Hello' } }] })
+      + frame({ choices: [{ delta: {}, finish_reason: 'stop' }] })
+    );
+    expect(await collect(generate(provider, 'test-model', turns, new AbortController().signal, { fetcher }))).toEqual([think(''), think('why'), think(' not'), say('Hello')]);
+  });
+  it('reads <think> tags left in the answer, however the chunks fall', async () => {
+    const chunks = ['<th', 'ink>rea', 'soning</thi', 'nk>\n\nAnswer'];
+    const fetcher = mockResponse(chunks.map(c => frame({ choices: [{ delta: { content: c } }] })).join('') + frame({ choices: [{ delta: {}, finish_reason: 'stop' }] }));
+    expect(await collect(generate(provider, 'test-model', turns, new AbortController().signal, { fetcher }))).toEqual([think(''), think('rea'), think('soning'), say('Answer')]);
+  });
+  it('splits tagged reasoning from text at every awkward point, and only at the start', () => {
+    const run = (chunks: string[]) => { const t = new ThinkTags(); return [...chunks.flatMap(c => t.push(c)), ...t.flush()]; };
+    expect(run(['<th', 'ink>rea', 'soning</thi', 'nk>\n\nAnswer'])).toEqual([think(''), think('rea'), think('soning'), say('Answer')]);
+    expect(run(['<think>a</think>b'])).toEqual([think(''), think('a'), say('b')]);
+    expect(run(['<think>', 'a', '</think>', '\n', '\n', 'b'])).toEqual([think(''), think('a'), say('b')]);
+    expect(run(['  \n', '<think>a</think> b'])).toEqual([think(''), think('a'), say('b')]);
+    expect(run(['Here is code: <think>x</think>'])).toEqual([say('Here is code: <think>x</think>')]);
+    expect(run(['Hel', 'lo'])).toEqual([say('Hel'), say('lo')]);
+    expect(run(['<thinks are fine'])).toEqual([say('<thinks are fine')]);
+    expect(run(['<think>never closed', ' at all'])).toEqual([think(''), think('never closed'), think(' at all')]);
+    expect(run(['<think>tail</thi'])).toEqual([think(''), think('tail'), think('</thi')]);
+    const held = new ThinkTags(); expect(held.push('<thi')).toEqual([]); expect(held.flush()).toEqual([say('<thi')]); expect(held.flush()).toEqual([]);
+    expect(run([''])).toEqual([]);
+  });
+  it('streams Anthropic thinking blocks, shown or redacted, ahead of the answer', async () => {
+    const fetcher = mockResponse(
+      frame({ type: 'content_block_start', index: 0, content_block: { type: 'thinking', thinking: '' } })
+      + frame({ type: 'content_block_delta', index: 0, delta: { type: 'thinking_delta', thinking: 'hmm' } })
+      + frame({ type: 'content_block_delta', index: 0, delta: { type: 'signature_delta', signature: 'sig' } })
+      + frame({ type: 'content_block_start', index: 1, content_block: { type: 'redacted_thinking', data: 'x' } })
+      + frame({ type: 'content_block_start', index: 2, content_block: { type: 'text', text: '' } })
+      + frame({ type: 'content_block_delta', index: 2, delta: { type: 'text_delta', text: 'Ciao' } })
+      + frame({ type: 'message_stop' })
+    );
+    expect(await collect(generate({ ...provider, kind: 'anthropic' }, 'claude', turns, new AbortController().signal, { fetcher }))).toEqual([think(''), think('hmm'), think(''), say('Ciao')]);
+  });
+  it('asks Claude to think adaptively only when told to, and names the setting when that is refused', async () => {
+    const bodies: Record<string, unknown>[] = [];
+    const ok = (async (_url, init) => { bodies.push(JSON.parse(init!.body as string)); return new Response(stream(frame({ type: 'message_stop' })), { headers: { 'Content-Type': 'text/event-stream' } }); }) as typeof fetch;
+    await collect(generate({ ...provider, kind: 'anthropic' }, 'claude', turns, new AbortController().signal, { fetcher: ok, thinking: true }));
+    await collect(generate({ ...provider, kind: 'anthropic' }, 'claude', turns, new AbortController().signal, { fetcher: ok }));
+    const openai = (async (_url, init) => { bodies.push(JSON.parse(init!.body as string)); return new Response(stream(frame({ choices: [{ delta: {}, finish_reason: 'stop' }] })), { headers: { 'Content-Type': 'text/event-stream' } }); }) as typeof fetch;
+    await collect(generate(provider, 'test-model', turns, new AbortController().signal, { fetcher: openai, thinking: true }));
+    expect(bodies[0].thinking).toEqual({ type: 'adaptive', display: 'summarized' });
+    expect(bodies[1]).not.toHaveProperty('thinking'); expect(bodies[2]).not.toHaveProperty('thinking');
+    const refused = (async () => new Response('bad request', { status: 400 })) as typeof fetch;
+    await expect(collect(generate({ ...provider, kind: 'anthropic' }, 'claude', turns, new AbortController().signal, { fetcher: refused, thinking: true }))).rejects.toThrow('Settings → Chat');
+    await expect(collect(generate({ ...provider, kind: 'anthropic' }, 'claude', turns, new AbortController().signal, { fetcher: refused }))).rejects.toThrow('HTTP 400');
+    await expect(collect(generate({ ...provider, kind: 'anthropic' }, 'claude', turns, new AbortController().signal, { fetcher: refused }))).rejects.not.toThrow('Settings');
   });
 });

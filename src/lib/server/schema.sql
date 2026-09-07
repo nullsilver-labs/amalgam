@@ -67,3 +67,24 @@ INSERT INTO schema_version(version) VALUES(2) ON CONFLICT DO NOTHING;
 -- can say where the excerpts came from without keeping a second copy of them.
 ALTER TABLE messages ADD COLUMN IF NOT EXISTS sources jsonb;
 INSERT INTO schema_version(version) VALUES(3) ON CONFLICT DO NOTHING;
+-- Conversations branch. A message follows its parent; messages with the same
+-- parent are alternatives, such as an answer generated again beside the first.
+-- The conversation remembers the leaf it was last read at, so the same branch
+-- opens on every device. Rows from before branching are threaded in position
+-- order, once: a later root with no parent is a branch, not an orphan.
+-- An assistant message also keeps the reasoning its model showed, and how long
+-- the model took before the first character of its answer.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS parent_id uuid REFERENCES messages(id) ON DELETE CASCADE;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS thinking text;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS thinking_ms integer;
+ALTER TABLE conversations ADD COLUMN IF NOT EXISTS leaf_id uuid;
+CREATE INDEX IF NOT EXISTS messages_parent ON messages(parent_id);
+DO $$ BEGIN
+  IF NOT EXISTS (SELECT 1 FROM schema_version WHERE version = 4) THEN
+    UPDATE messages m SET parent_id = p.prev
+      FROM (SELECT id, lag(id) OVER (PARTITION BY conversation_id ORDER BY position) AS prev FROM messages) p
+      WHERE m.id = p.id AND p.prev IS NOT NULL;
+    UPDATE conversations c SET leaf_id = (SELECT id FROM messages WHERE conversation_id = c.id ORDER BY position DESC LIMIT 1);
+  END IF;
+END $$;
+INSERT INTO schema_version(version) VALUES(4) ON CONFLICT DO NOTHING;

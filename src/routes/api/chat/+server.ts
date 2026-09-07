@@ -6,7 +6,7 @@ import { body } from '$lib/server/http';
 import { resolveModel } from '$lib/server/config';
 import { modelCatalog } from '$lib/server/model-catalog';
 import { generate, ProviderError } from '$lib/server/providers';
-import { assembleContext, attachSources, chatInputSchema, contextBudget, type Budget, type SourceExcerpt } from '$lib/server/context';
+import { assembleContext, attachSources, chatInputSchema, contextBudget, THINKING_HEADROOM, type Budget, type SourceExcerpt } from '$lib/server/context';
 import { readSettings } from '$lib/server/settings';
 import { activeRuns } from '$lib/server/runs';
 import { requireScope } from '$lib/server/auth';
@@ -41,27 +41,50 @@ async function fetchSources(ids: string[] | undefined): Promise<SourceExcerpt[]>
   return excerpts;
 }
 
+/**
+ * The branch a message ends: itself and its ancestors, oldest first, at most
+ * a hundred and one of them. What the model is given is one path through the
+ * conversation, never the other branches beside it.
+ */
+const PATH = `WITH RECURSIVE path AS (
+    SELECT id, parent_id, role, content, status, 0 AS depth FROM messages WHERE id = $1
+    UNION ALL
+    SELECT m.id, m.parent_id, m.role, m.content, m.status, path.depth + 1 FROM messages m JOIN path ON m.id = path.parent_id WHERE path.depth < 100
+  ) SELECT role, content, status FROM path ORDER BY depth DESC`;
+
 export async function POST(event: import('./$types').RequestEvent) {
   requireScope(event, 'generate');
   const { request } = event;
   const input = await body(request, chatInputSchema);
   const selected = resolveModel((await modelCatalog(env)).providers, input.model);
   if (!selected) error(400, 'Model unavailable. Reload and select a model; check Settings → Models for discovery errors or configure a manual list.');
+  const id = input.conversationId || randomUUID();
+  let db = await database();
+  // A regeneration answers an existing user message again: the one the named
+  // answer followed, with whatever it had attached. Both are read before the
+  // transaction; a finished message never changes.
+  let again: Message | null = null;
+  if (input.regenerate) {
+    const target: Message | undefined = (await db.query('SELECT * FROM messages WHERE id=$1 AND conversation_id=$2', [input.regenerate, id])).rows[0];
+    if (!target || target.role !== 'assistant') error(404, 'The response to generate again was not found in this conversation');
+    if (target.status === 'streaming') error(409, 'This conversation already has a response in progress');
+    again = target.parent_id ? (await db.query('SELECT * FROM messages WHERE id=$1', [target.parent_id])).rows[0] ?? null : null;
+    if (!again || again.role !== 'user') error(409, 'That response has no message to answer');
+  }
   // Before the transaction: reading another application is slow and may fail,
   // and neither belongs inside a row lock on this conversation.
-  const excerpts = await fetchSources(input.sources);
-  const id = input.conversationId || randomUUID();
+  const excerpts = await fetchSources(again ? again.sources?.map(s => s.id) : input.sources);
   if (activeRuns.has(id)) error(409, 'This conversation already has a response in progress');
   if (activeRuns.size >= 3) error(429, 'Three responses are already running. Wait for one to finish.');
   const controller = new AbortController();
   activeRuns.set(id, controller);
-  let db;
   let conversation: Conversation;
   let user: Message;
   let assistant: Message;
   let context: ReturnType<typeof assembleContext>;
   let manifest: ContextInfo;
   let budget: Budget;
+  let thinking: boolean;
   try {
     db = await database();
     const client = await db.connect();
@@ -69,7 +92,7 @@ export async function POST(event: import('./$types').RequestEvent) {
       await client.query('BEGIN');
       if (!input.conversationId) {
         if (input.projectId && !(await client.query('SELECT 1 FROM projects WHERE id=$1 FOR KEY SHARE', [input.projectId])).rowCount) error(404, 'Project not found');
-        await client.query('INSERT INTO conversations(id,title,project_id) VALUES($1,$2,$3)', [id, input.text.slice(0, 80), input.projectId || null]);
+        await client.query('INSERT INTO conversations(id,title,project_id) VALUES($1,$2,$3)', [id, input.text!.slice(0, 80), input.projectId || null]);
       }
       conversation = (await client.query('SELECT * FROM conversations WHERE id=$1 FOR UPDATE', [id])).rows[0];
       if (!conversation) error(404, 'Conversation not found');
@@ -77,16 +100,31 @@ export async function POST(event: import('./$types').RequestEvent) {
       let instructions = '';
       if (conversation.project_id) instructions = (await client.query('SELECT instructions FROM projects WHERE id=$1', [conversation.project_id])).rows[0]?.instructions || '';
       const settings = await readSettings(client);
-      budget = contextBudget(settings.contextTokens, selected.window);
+      thinking = settings.thinking;
+      budget = contextBudget(settings.contextTokens, selected.window, thinking ? THINKING_HEADROOM : 0);
+      if (again) user = again;
+      else {
+        // The new turn follows the end of the branch being read: the one the
+        // request names, else the one the conversation was last read at.
+        let parent: string | null = null;
+        if (input.conversationId) {
+          if (input.parentId) {
+            if (!(await client.query('SELECT 1 FROM messages WHERE id=$1 AND conversation_id=$2', [input.parentId, id])).rowCount) error(404, 'The message to reply after was not found in this conversation');
+            parent = input.parentId;
+          } else parent = conversation.leaf_id ?? (await client.query('SELECT id FROM messages WHERE conversation_id=$1 ORDER BY position DESC LIMIT 1', [id])).rows[0]?.id ?? null;
+        }
+        user = (await client.query(
+          "INSERT INTO messages(id,conversation_id,role,content,status,sources,parent_id) VALUES($1,$2,'user',$3,'complete',$4,$5) RETURNING *",
+          [randomUUID(), id, input.text, null, parent]
+        )).rows[0];
+      }
       // The excerpts lead the turn the model is given; the row keeps the words
       // the person actually typed, with the attribution beside them.
-      const attached = attachSources(excerpts, input.text, budget.input);
-      user = (await client.query(
-        "INSERT INTO messages(id,conversation_id,role,content,status,sources) VALUES($1,$2,'user',$3,'complete',$4) RETURNING *",
-        [randomUUID(), id, input.text, attached.sources.length ? JSON.stringify(attached.sources) : null]
-      )).rows[0];
-      const history: { role: string; content: string; status: string }[] =
-        (await client.query('SELECT role,content,status FROM messages WHERE conversation_id=$1 ORDER BY position DESC LIMIT 101', [id])).rows.reverse();
+      const attached = attachSources(excerpts, user.content, budget.input);
+      if (!again && attached.sources.length) {
+        user = (await client.query('UPDATE messages SET sources=$2 WHERE id=$1 RETURNING *', [user.id, JSON.stringify(attached.sources)])).rows[0];
+      }
+      const history: { role: string; content: string; status: string }[] = (await client.query(PATH, [user.id])).rows;
       if (attached.sources.length) history[history.length - 1].content = attached.content;
       context = assembleContext(history as Parameters<typeof assembleContext>[0], instructions, settings.systemPrompt, budget.input);
       manifest = {
@@ -94,8 +132,11 @@ export async function POST(event: import('./$types').RequestEvent) {
         truncated: context.manifest.truncated || history.length === 101,
         sources: { count: attached.sources.length, tokens: attached.tokens, truncated: attached.truncated }
       };
-      assistant = (await client.query("INSERT INTO messages(id,conversation_id,role,status,model,context_manifest) VALUES($1,$2,'assistant','streaming',$3,$4) RETURNING *", [randomUUID(), id, input.model, JSON.stringify({ ...manifest, instructions, input: context.turns })])).rows[0];
-      await client.query('UPDATE conversations SET updated_at=now() WHERE id=$1', [id]);
+      assistant = (await client.query(
+        "INSERT INTO messages(id,conversation_id,role,status,model,context_manifest,parent_id) VALUES($1,$2,'assistant','streaming',$3,$4,$5) RETURNING *",
+        [randomUUID(), id, input.model, JSON.stringify({ ...manifest, instructions, input: context.turns }), user.id]
+      )).rows[0];
+      conversation = (await client.query('UPDATE conversations SET updated_at=now(), leaf_id=$2 WHERE id=$1 RETURNING *', [id, assistant.id])).rows[0];
       await client.query('COMMIT');
     } catch (err) { await client.query('ROLLBACK'); throw err; }
     finally { client.release(); }
@@ -124,17 +165,29 @@ export async function POST(event: import('./$types').RequestEvent) {
       }, 15_000);
       void (async () => {
         let content = '';
+        // What the model showed of its reasoning — '' once it reported any —
+        // and how long it took to reach the first character of its answer.
+        let thought: string | null = null;
+        let thinkingMs: number | null = null;
+        const started = Date.now();
         let status: MessageStatus = 'complete';
         let failure: string | undefined;
         let checkpoint = Date.now();
         try {
-          for await (const text of generate(selected.provider, selected.model, context.turns, signal, { maxTokens: budget.output })) {
+          for await (const piece of generate(selected.provider, selected.model, context.turns, signal, { maxTokens: budget.output, thinking })) {
             signal.throwIfAborted();
-            if (content.length + text.length > 200_000) throw new ProviderError('The response exceeded the size limit. The partial response was saved.');
-            content += text;
-            emit({ type: 'delta', text });
+            if (piece.kind === 'thinking') {
+              if (thought === null) thought = '';
+              if (thought.length + piece.text.length <= 200_000) thought += piece.text;
+              emit({ type: 'thinking', text: piece.text });
+            } else {
+              if (thought !== null && thinkingMs === null) thinkingMs = Date.now() - started;
+              if (content.length + piece.text.length > 200_000) throw new ProviderError('The response exceeded the size limit. The partial response was saved.');
+              content += piece.text;
+              emit({ type: 'delta', text: piece.text });
+            }
             if (Date.now() - checkpoint >= 1000) {
-              await connection.query('UPDATE messages SET content=$2 WHERE id=$1', [assistant.id, content]);
+              await connection.query('UPDATE messages SET content=$2, thinking=$3 WHERE id=$1', [assistant.id, content, thought]);
               checkpoint = Date.now();
             }
           }
@@ -146,10 +199,11 @@ export async function POST(event: import('./$types').RequestEvent) {
             : status === 'cancelled' ? 'Response stopped. Any partial text was saved.'
             : err instanceof ProviderError ? err.message : 'Could not finish the response. Check the provider connection and database.';
         }
+        if (thought !== null && thinkingMs === null) thinkingMs = Date.now() - started;
         try {
-          await connection.query('UPDATE messages SET content=$2,status=$3,error=$4 WHERE id=$1', [assistant.id, content, status, failure || null]);
+          await connection.query('UPDATE messages SET content=$2,status=$3,error=$4,thinking=$5,thinking_ms=$6 WHERE id=$1', [assistant.id, content, status, failure || null, thought, thinkingMs]);
           await connection.query('UPDATE conversations SET updated_at=now() WHERE id=$1', [id]);
-          emit({ type: 'done', status, error: failure });
+          emit({ type: 'done', status, error: failure, ...(thinkingMs !== null ? { thinking_ms: thinkingMs } : {}) });
         } catch {
           console.error('Failed to persist response', assistant.id);
           emit({ type: 'error', error: 'The response could not be saved. Reload before continuing.' });

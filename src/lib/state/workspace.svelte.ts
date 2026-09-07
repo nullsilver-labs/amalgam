@@ -37,14 +37,53 @@ let sequence = 0;
 
 /** A conversation as a tab knows it before its messages have been fetched. */
 function stub(id: string, title: string, project_id: string | null): Conversation {
-  return { id, title, project_id, created_at: '', updated_at: '' };
+  return { id, title, project_id, created_at: '', updated_at: '', leaf_id: null };
+}
+
+/**
+ * The branch that ends at `leafId`: root first. A conversation is a tree —
+ * an answer generated again sits beside the first, under the same message —
+ * and the transcript shows one path through it. A leaf nobody can find (a
+ * conversation from before branching, say) means the newest message.
+ */
+export function threadOf(messages: Message[], leafId: string | null): Message[] {
+  if (!messages.length) return [];
+  const byId = new Map(messages.map(m => [m.id, m]));
+  const out: Message[] = [];
+  const seen = new Set<string>();
+  let node: Message | undefined = (leafId && byId.get(leafId)) || messages[messages.length - 1];
+  while (node && !seen.has(node.id)) {
+    seen.add(node.id); out.push(node);
+    node = node.parent_id ? byId.get(node.parent_id) : undefined;
+  }
+  return out.reverse();
+}
+
+/** The messages that follow the same one as `message` — itself among them, in the order written. */
+export function siblingsOf(messages: Message[], message: Message): Message[] {
+  const parent = message.parent_id ?? null;
+  return messages.filter(m => (m.parent_id ?? null) === parent);
+}
+
+/** The newest end of the branch below `message`: itself, or its latest child's latest child, and so on. */
+export function tipOf(messages: Message[], message: Message): Message {
+  let node = message;
+  for (let guard = 0; guard < messages.length; guard++) {
+    const children = messages.filter(m => m.parent_id === node.id);
+    if (!children.length) return node;
+    node = children[children.length - 1];
+  }
+  return node;
 }
 
 export class Session {
   /** Tab identity — stable while a blank tab becomes a saved conversation. */
   readonly key = `tab-${++sequence}`;
   conversation = $state<Conversation | null>(null);
+  /** Every message of the conversation, every branch, in the order written. */
   messages = $state<Message[]>([]);
+  /** The end of the branch being read. */
+  leafId = $state<string | null>(null);
   projectId = $state<string | null>(null);
   model = $state('');
   draft = $state('');
@@ -58,7 +97,11 @@ export class Session {
   loaded = $state(false);
   /** Bumped whenever the composer should take focus. */
   focusTick = $state(0);
+  /** When the response this tab is writing was accepted — what "Thinking for 12s" counts from. */
+  startedAt = $state(0);
 
+  /** The branch being read, root first: what the transcript shows and a new message follows. */
+  thread = $derived(threadOf(this.messages, this.leafId));
   /** A response is being written — by this tab or, after a reload, by nobody. */
   streaming = $derived(this.messages.some(m => m.status === 'streaming'));
   title = $derived(this.conversation?.title ?? 'New chat');
@@ -117,6 +160,7 @@ export class Session {
       const result = await api<{ conversation: Conversation; messages: Message[] }>(`/api/conversations/${id}`);
       if (version !== this.#requestVersion) return false;
       this.conversation = result.conversation; this.messages = result.messages; this.projectId = this.conversation.project_id;
+      this.leafId = result.conversation.leaf_id ?? null;
       this.contextInfo = null; this.loaded = true; this.restoreDraft();
       if (this.#modelConversationId !== id) {
         const lastModel = [...this.messages].reverse().find(m => m.model)?.model;
@@ -131,10 +175,28 @@ export class Session {
   blank(scope: string | null) {
     ++this.#requestVersion;
     if (this.loaded) this.rememberDraft();
-    this.loading = false; this.conversation = null; this.messages = []; this.projectId = scope;
+    this.loading = false; this.conversation = null; this.messages = []; this.leafId = null; this.projectId = scope;
     this.contextInfo = null; this.problem = ''; this.loaded = true; this.sources = [];
     this.#modelConversationId = null;
     this.restoreDraft();
+  }
+
+  /** Where `message` stands among the branches at its point: which of how many. */
+  branch(message: Message): { index: number; count: number } {
+    const siblings = siblingsOf(this.messages, message);
+    return { index: siblings.findIndex(m => m.id === message.id), count: siblings.length };
+  }
+
+  /** Read the branch `steps` over from `message` — its next or previous sibling, down to that branch's newest end. */
+  async switchBranch(message: Message, steps: number) {
+    if (this.busy || this.loading || !this.conversation) return;
+    const siblings = siblingsOf(this.messages, message);
+    const target = siblings[siblings.findIndex(m => m.id === message.id) + steps];
+    if (!target) return;
+    this.leafId = tipOf(this.messages, target).id;
+    // Remembered on the server, so this branch is the one open everywhere.
+    try { this.conversation = await api<Conversation>(`/api/conversations/${this.conversation.id}`, { method: 'PATCH', body: JSON.stringify({ leafId: this.leafId }) }); }
+    catch (err) { this.problem = messageOf(err); }
   }
 
   async send() {
@@ -143,13 +205,30 @@ export class Session {
     // Sent by id: the server resolves them against the one library it was
     // configured with, so nothing here can point it somewhere else.
     const sources = this.sources.map(s => s.id);
+    await this.#run({
+      conversationId: this.conversation?.id, projectId: this.projectId, model: this.model, text,
+      ...(sources.length ? { sources } : {}), ...(this.conversation && this.leafId ? { parentId: this.leafId } : {})
+    }, true);
+  }
+
+  /** Answer the message before `message` again, beside it, with this tab's model. */
+  async regenerate(message: Message) {
+    if (!this.conversation || !workspace.ready || this.loading || this.busy || this.streaming) return;
+    if (!workspace.data.models.some(m => m.id === this.model)) return;
+    await this.#run({ conversationId: this.conversation.id, model: this.model, regenerate: message.id }, false);
+  }
+
+  /** One request to /api/chat, streamed into this tab. `clear` empties the composer once the request is taken. */
+  async #run(body: Record<string, unknown>, clear: boolean) {
     this.busy = true; this.problem = '';
     let accepted = false, terminal = false;
+    let assistantId = '';
+    const written = () => this.messages.find(m => m.id === assistantId);
     this.#generation = new AbortController();
     try {
       const response = await fetch('/api/chat', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conversationId: this.conversation?.id, projectId: this.projectId, model: this.model, text, ...(sources.length ? { sources } : {}) }),
+        body: JSON.stringify(body),
         signal: this.#generation.signal
       });
       if (response.status === 401) { window.location.assign('/login'); return; }
@@ -161,29 +240,39 @@ export class Session {
           accepted = true;
           // The request was taken, so the composer empties — attached sources
           // included. A refusal leaves both where they were, to send again.
-          this.draft = ''; this.sources = []; this.rememberDraft();
+          if (clear) { this.draft = ''; this.sources = []; this.rememberDraft(); }
           this.conversation = event.conversation; this.projectId = this.conversation.project_id;
           this.#modelConversationId = this.conversation.id;
           this.rememberDraft();
-          this.messages = [...this.messages, event.user, event.assistant];
+          // A regeneration's user message is already here; only what is new is added.
+          const fresh = [event.user, event.assistant].filter(m => !this.messages.some(x => x.id === m.id));
+          this.messages = [...this.messages, ...fresh];
+          this.leafId = event.assistant.id; assistantId = event.assistant.id;
+          this.startedAt = Date.now();
           this.contextInfo = event.context;
           workspace.data.conversations = [this.conversation, ...workspace.data.conversations.filter(c => c.id !== this.conversation!.id)];
           if (workspace.active === this) replaceState(`/?c=${this.conversation.id}`, {});
+        } else if (event.type === 'thinking') {
+          const m = written();
+          if (m) { if (m.thinking === null) m.thinking = ''; m.thinking += event.text; }
         } else if (event.type === 'delta') {
-          const last = this.messages[this.messages.length - 1];
-          if (last) last.content += event.text;
+          const m = written();
+          if (m) {
+            if (m.thinking !== null && m.thinking_ms === null) m.thinking_ms = Date.now() - this.startedAt;
+            m.content += event.text;
+          }
         } else if (event.type === 'done') {
           terminal = true;
-          const last = this.messages[this.messages.length - 1];
-          if (last) { last.status = event.status; last.error = event.error || null; }
+          const m = written();
+          if (m) { m.status = event.status; m.error = event.error || null; if (event.thinking_ms !== undefined) m.thinking_ms = event.thinking_ms; }
         } else if (event.type === 'error') { terminal = true; throw new Error(event.error); }
       }
       if (!terminal) throw new Error('Connection interrupted. Reload the conversation to check the saved response.');
     } catch (err) {
       this.problem = messageOf(err);
       if (accepted) {
-        const last = this.messages[this.messages.length - 1];
-        if (last?.status === 'streaming') { last.status = 'interrupted'; last.error = 'Connection lost. Reload to check the saved response.'; }
+        const m = written();
+        if (m?.status === 'streaming') { m.status = 'interrupted'; m.error = 'Connection lost. Reload to check the saved response.'; }
       }
     } finally { this.busy = false; this.#generation = undefined; this.focus(); }
   }
@@ -211,9 +300,10 @@ class Workspace {
   /** Conversations open in some tab. */
   openIds = $derived(new Set(this.sessions.map(s => s.conversation?.id).filter((id): id is string => !!id)));
 
-  /* The active tab, under the names components read. */
+  /* The active tab, under the names components read. `messages` is the
+   * branch being read — the transcript's list — not every branch there is. */
   get current() { return this.active.conversation; }
-  get messages() { return this.active.messages; }
+  get messages() { return this.active.thread; }
   get projectId() { return this.active.projectId; }
   get model() { return this.active.model; }
   get draft() { return this.active.draft; }
@@ -396,6 +486,16 @@ class Workspace {
   stop() { return this.active.stop(); }
   reload() { return this.active.reload(); }
 
+  /** Answer again, beside `message`, with `model` — which becomes this tab's model, as the picker would make it. */
+  async regenerate(message: Message, model: string) {
+    if (this.loading || this.busy || !this.data.models.some(m => m.id === model)) return;
+    this.active.selectModel(model);
+    prefs.setModel(model);
+    await this.active.regenerate(message);
+  }
+
+  switchBranch(message: Message, steps: number) { return this.active.switchBranch(message, steps); }
+
   async rename(id: string, title: string) {
     const updated = await api<Conversation>(`/api/conversations/${id}`, { method: 'PATCH', body: JSON.stringify({ title }) });
     const holder = this.holder(id);
@@ -450,7 +550,8 @@ class Workspace {
   exportConversation() {
     const s = this.active;
     if (!s.conversation) return;
-    const blob = new Blob([JSON.stringify({ version: 1, conversation: s.conversation, messages: s.messages }, null, 2)], { type: 'application/json' });
+    // Every branch, with parent links, and the one that was open.
+    const blob = new Blob([JSON.stringify({ version: 2, conversation: s.conversation, leaf: s.leafId, messages: s.messages }, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url; link.download = `amalgam-${s.conversation.id}.json`; link.click();

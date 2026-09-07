@@ -13,6 +13,8 @@ import { DEFAULT_CONTEXT_TOKENS, type ChatTurn, type ContextInfo, type Message, 
 export const CHARS_PER_TOKEN = 3.5;
 /** The most a reply may run to, when the window allows it. */
 export const MAX_OUTPUT_TOKENS = 4096;
+/** The room a reply keeps for its thinking on top of that, when models are asked to think. */
+export const THINKING_HEADROOM = 16_384;
 /** The share of a declared window kept free for what the estimate cannot see: chat-template and per-message overhead. */
 const WINDOW_MARGIN = 0.1;
 export const BASE_INSTRUCTION = 'You are a helpful assistant. Respond clearly and honestly.';
@@ -33,11 +35,12 @@ export interface Budget { input: number; output: number }
  * Splits a request between what is sent and what the reply may take. The
  * instance's ceiling bounds the input; a declared window bounds it further,
  * after the reply's reservation, which itself shrinks to a quarter of a
- * small window so that a 4k model can still be asked something.
+ * small window so that a 4k model can still be asked something. `thinking`
+ * is extra room the reply keeps for reasoning that counts against its cap.
  */
-export function contextBudget(ceiling: number, window: number | null): Budget {
-  if (!window) return { input: ceiling, output: MAX_OUTPUT_TOKENS };
-  const output = Math.min(MAX_OUTPUT_TOKENS, Math.floor(window / 4));
+export function contextBudget(ceiling: number, window: number | null, thinking = 0): Budget {
+  if (!window) return { input: ceiling, output: MAX_OUTPUT_TOKENS + thinking };
+  const output = Math.min(MAX_OUTPUT_TOKENS + thinking, Math.floor(window / 4));
   const input = Math.min(ceiling, Math.floor((window - output) * (1 - WINDOW_MARGIN)));
   return { input, output };
 }
@@ -93,14 +96,27 @@ export const SOURCE_ID = /^[A-Za-z0-9_-]{1,64}$/;
  * picked in the composer — never text, never a URL, never an address for the
  * server to fetch: an id, which this server resolves against the one library it
  * was configured with.
+ *
+ * Two shapes. A new turn carries `text`, and follows `parentId` — the end of
+ * the branch being read — or, when that is left out, the conversation's own
+ * leaf. A regeneration names an assistant message in `regenerate` and carries
+ * nothing else: the answer is written again, beside the first, to the same
+ * user message with the same attached sources.
  */
 export const chatInputSchema = z.object({
   conversationId: z.string().uuid().optional(),
   projectId: z.string().uuid().nullable().optional(),
   model: z.string().min(1).max(300),
-  text: z.string().trim().min(1).max(16000),
+  text: z.string().trim().min(1).max(16000).optional(),
   sources: z.array(z.string().regex(SOURCE_ID, 'A source id may only contain letters, digits, hyphens and underscores'))
-    .max(5, 'At most five sources can be attached to one message').optional()
+    .max(5, 'At most five sources can be attached to one message').optional(),
+  parentId: z.string().uuid().optional(),
+  regenerate: z.string().uuid().optional()
+}).superRefine((input, ctx) => {
+  if (input.regenerate) {
+    if (!input.conversationId) ctx.addIssue({ code: 'custom', message: 'A regeneration needs the conversation it belongs to', path: ['conversationId'] });
+    if (input.text !== undefined || input.sources || input.parentId) ctx.addIssue({ code: 'custom', message: 'A regeneration carries no text, sources or parent of its own', path: ['regenerate'] });
+  } else if (input.text === undefined) ctx.addIssue({ code: 'custom', message: 'Required', path: ['text'] });
 });
 
 /** One card as the turn will quote it. */

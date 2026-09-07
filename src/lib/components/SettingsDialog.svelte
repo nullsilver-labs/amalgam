@@ -61,7 +61,7 @@
 	async function save() {
 		saving = true; error = ''; saved = false;
 		try {
-			await workspace.saveSettings({ systemPrompt: draft.systemPrompt, contextTokens: draft.contextTokens, suggestions: draft.suggestions.map(s => ({ label: s.label.trim(), text: s.text })) });
+			await workspace.saveSettings({ systemPrompt: draft.systemPrompt, contextTokens: draft.contextTokens, thinking: draft.thinking, suggestions: draft.suggestions.map(s => ({ label: s.label.trim(), text: s.text })) });
 			Object.assign(draft, structuredClone($state.snapshot(workspace.data.settings)));
 			saved = true;
 			setTimeout(() => (saved = false), 2000);
@@ -224,6 +224,13 @@
 					<input class="budget__field" type="number" inputmode="numeric" min="1000" max="2000000" step="1000" bind:value={draft.contextTokens} aria-label="Context budget in tokens" aria-invalid={!budgetValid} />
 					<span class="budget__unit">tokens{#if budgetValid}, about {formatTokens(draft.contextTokens)}{/if}</span>
 				</div>
+
+				<h3 class="panel__title">Thinking</h3>
+				<p class="panel__lede">Asks Claude models to think before answering, adaptively, and to show a summary of it; every reply keeps room for up to 16k tokens of thinking on top of its own. Reasoning that other models send is shown either way. Turn it off for Claude Haiku 4.5 and older Claude models, which reject the request.</p>
+				<label class="toggle">
+					<input type="checkbox" bind:checked={draft.thinking} />
+					<span>Ask models to think before answering</span>
+				</label>
 
 				<h3 class="panel__title">Suggestions</h3>
 				<p class="panel__lede">The pills under the composer on a new chat. Each drops its text into the composer for you to finish.</p>
@@ -639,11 +646,22 @@ OPENROUTER_API_KEY=your-key
 		margin-bottom: var(--space-2);
 	}
 
-	.scope {
+	.scope,
+	.toggle {
 		display: flex;
 		align-items: flex-start;
 		gap: var(--space-3);
 		cursor: pointer;
+	}
+
+	.toggle {
+		align-items: center;
+		font-size: var(--text-sm);
+		color: var(--color-text);
+	}
+
+	.toggle input {
+		accent-color: var(--color-accent);
 	}
 
 	.scope input {
