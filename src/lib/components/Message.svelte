@@ -1,5 +1,6 @@
 <script lang="ts">
-	import { Check, ChevronLeft, ChevronRight, Copy, Info, RefreshCw } from '@lucide/svelte';
+	import { Check, ChevronLeft, ChevronRight, Copy, Info, Pencil, RefreshCw } from '@lucide/svelte';
+	import { modifier } from '$lib/format';
 	import Markdown from './Markdown.svelte';
 	import Menu from './Menu.svelte';
 	import { workspace } from '$lib/state/workspace.svelte';
@@ -18,6 +19,10 @@
 	 * "Worked for 18s" after — and opens what it showed of the thinking, when
 	 * it showed any. In the row, "answer again" opens the model list; the new
 	 * answer is written beside this one, and a ‹ 1 / 2 › between the two.
+	 *
+	 * A person's message can be sent again with other words: the bubble
+	 * becomes a field, and what is sent goes beside the original as a branch
+	 * of its own, quoting the same cards. Nothing is overwritten.
 	 */
 
 	let { message, last = false, startedAt = 0 }: { message: Message; last?: boolean; startedAt?: number } = $props();
@@ -72,11 +77,70 @@
 	/* Branches: which of the answers at this point is being read. */
 	const branch = $derived(workspace.active.branch(message));
 	const canSwitch = $derived(!workspace.busy && !workspace.loading);
+
+	/*
+	 * Statistics, when Settings › Chat asks for them: under a person's message
+	 * the size of the request that answered it — the whole context sent, not
+	 * the message alone — and under the model's, after its name in the same
+	 * breath, the reply's speed, its tokens and its time. A tilde marks an
+	 * estimate: the provider counted nothing, so the numbers are reckoned from
+	 * characters.
+	 */
+	const stats = $derived(workspace.data.settings.stats);
+	const answer = $derived.by(() => {
+		if (message.role !== 'user') return null;
+		const at = workspace.messages.findIndex(m => m.id === message.id);
+		const next = at >= 0 ? workspace.messages[at + 1] : undefined;
+		return next?.role === 'assistant' && next.input_tokens != null ? next : null;
+	});
+	const requestStat = $derived(answer ? `${answer.tokens_estimated ? '~' : ''}${answer.input_tokens!.toLocaleString()} tokens sent` : '');
+	const replyStat = $derived.by(() => {
+		if (message.role !== 'assistant' || message.output_tokens == null || message.status === 'streaming') return '';
+		const tokens = `${message.tokens_estimated ? '~' : ''}${message.output_tokens.toLocaleString()} tokens`;
+		const writing = message.duration_ms != null && message.first_token_ms != null ? message.duration_ms - message.first_token_ms : 0;
+		const inside = [tokens, ...(message.duration_ms != null ? [formatDuration(message.duration_ms)] : [])].join(', ');
+		if (writing > 0 && message.output_tokens > 0) return `${Math.round(message.output_tokens / (writing / 1000)).toLocaleString()} tokens/s (${inside})`;
+		return inside;
+	});
+
+	/* Editing: the bubble as a field, until it is sent or let go. */
+	let editing = $state(false);
+	let edited = $state('');
+	let field = $state<HTMLTextAreaElement | null>(null);
+	const canEdit = $derived(workspace.ready && !workspace.busy && !workspace.streaming && !workspace.loading && workspace.data.models.length > 0);
+	function startEdit() { edited = message.content; editing = true; }
+	function cancelEdit() { editing = false; }
+	async function sendEdit() {
+		const text = edited.trim();
+		if (!text || !canEdit) return;
+		editing = false;
+		await workspace.edit(message, text);
+	}
+	function onEditKey(event: KeyboardEvent) {
+		if (event.key === 'Escape') { event.preventDefault(); cancelEdit(); }
+		else if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && !event.isComposing) { event.preventDefault(); void sendEdit(); }
+	}
+	$effect(() => {
+		if (!editing || !field) return;
+		field.style.height = 'auto';
+		field.style.height = `${field.scrollHeight}px`;
+	});
+	$effect(() => { if (editing && field) { field.focus(); field.setSelectionRange(field.value.length, field.value.length); } });
 </script>
 
 <article class="turn turn--{message.role}" class:is-last={last}>
 	{#if message.role === 'user'}
-		<div class="bubble">{message.content}</div>
+		{#if editing}
+			<div class="bubble bubble--editing">
+				<textarea bind:this={field} bind:value={edited} aria-label="Edit your message" rows="1" maxlength="16000" oninput={() => { if (field) { field.style.height = 'auto'; field.style.height = `${field.scrollHeight}px`; } }} onkeydown={onEditKey}></textarea>
+				<div class="edit__row">
+					<button type="button" class="edit__button" onclick={cancelEdit}>Cancel</button>
+					<button type="button" class="edit__button edit__button--send" onclick={() => void sendEdit()} disabled={!edited.trim() || !canEdit} title="Send ({modifier()} Enter)">Send</button>
+				</div>
+			</div>
+		{:else}
+			<div class="bubble">{message.content}</div>
+		{/if}
 		{#if message.sources?.length}
 			<p class="turn__sources">
 				<span>From your corpus library:</span>
@@ -90,6 +154,7 @@
 			</p>
 		{/if}
 		<div class="actions actions--user">
+			{#if stats && requestStat}<span class="stat">{requestStat}</span>{/if}
 			{#if branch.count > 1}
 				<span class="branches">
 					<button type="button" class="action action--small" onclick={() => void workspace.switchBranch(message, -1)} disabled={!canSwitch || branch.index === 0} aria-label="Previous branch"><ChevronLeft size={13} strokeWidth={2} /></button>
@@ -100,6 +165,11 @@
 			<button type="button" class="action" onclick={copy} aria-label="Copy message">
 				{#if copied}<Check size={14} />{:else}<Copy size={14} />{/if}
 			</button>
+			{#if !editing}
+				<button type="button" class="action" onclick={startEdit} disabled={!canEdit} aria-label="Edit message" title="Send again with other words, as a new branch">
+					<Pencil size={14} />
+				</button>
+			{/if}
 		</div>
 	{:else}
 		{#if message.thinking !== null}
@@ -145,7 +215,7 @@
 						<button type="button" class="action action--small" onclick={() => void workspace.switchBranch(message, 1)} disabled={!canSwitch || branch.index === branch.count - 1} aria-label="Next branch"><ChevronRight size={13} strokeWidth={2} /></button>
 					</span>
 				{/if}
-				{#if message.model}<span class="model">{modelName(message.model)}</span>{/if}
+				{#if message.model}<span class="model">{modelName(message.model)}{#if stats && replyStat}, <span class="stat">{replyStat}</span>{/if}</span>{/if}
 				{#if status}<span class="status">{status}</span>{/if}
 			</div>
 		{/if}
@@ -176,6 +246,75 @@
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
 		text-wrap: pretty;
+	}
+
+	/* The bubble as a field: the same plate, lit at the edge, the words in a
+	 * bare textarea and two quiet words beneath. */
+	.bubble--editing {
+		display: grid;
+		gap: var(--space-2);
+		width: 100%;
+		border-color: var(--color-border-lit);
+		white-space: normal;
+	}
+
+	.turn--user:has(.bubble--editing) {
+		max-width: 100%;
+	}
+
+	.bubble--editing textarea {
+		display: block;
+		width: 100%;
+		min-height: 1.75rem;
+		max-height: 40vh;
+		padding: 0;
+		background: none;
+		border: 0;
+		border-radius: 0;
+		resize: none;
+		font-size: var(--text-base);
+		line-height: var(--leading-relaxed);
+		color: var(--color-text-strong);
+		overflow-y: auto;
+	}
+
+	.bubble--editing textarea:focus {
+		outline: none;
+		border: 0;
+	}
+
+	.edit__row {
+		display: flex;
+		justify-content: flex-end;
+		gap: var(--space-1);
+		margin-right: calc(var(--space-2) * -1);
+	}
+
+	.edit__button {
+		height: var(--control-h-sm);
+		padding-inline: var(--space-2);
+		border-radius: var(--radius-full);
+		font-size: var(--text-xs);
+		font-weight: var(--weight-medium);
+		color: var(--color-text-muted);
+		cursor: pointer;
+		transition:
+			color var(--duration-fast) var(--ease-out),
+			background-color var(--duration-fast) var(--ease-out);
+	}
+
+	.edit__button:hover:not(:disabled) {
+		color: var(--color-text-strong);
+		background-color: var(--color-hover);
+	}
+
+	.edit__button--send {
+		color: var(--color-text-strong);
+	}
+
+	.edit__button:disabled {
+		color: var(--color-text-faint);
+		cursor: default;
 	}
 
 	/* The attribution under a message that quoted the library. */
@@ -349,13 +488,24 @@
 	}
 
 	.model,
-	.status {
+	.status,
+	.stat {
 		font-size: var(--text-2xs);
 		color: var(--color-text-faint);
 		overflow: hidden;
 		text-overflow: ellipsis;
 		white-space: nowrap;
 	}
+
+	/* Numbers line up; a tilde reads as one of them. */
+	.stat {
+		font-variant-numeric: tabular-nums;
+	}
+
+	.actions--user .stat {
+		margin-right: var(--space-1);
+	}
+
 
 	.status {
 		font-weight: var(--weight-medium);

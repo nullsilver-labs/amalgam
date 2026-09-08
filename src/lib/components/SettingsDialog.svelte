@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Globe, Info, KeyRound, Keyboard, Laptop, Library, LogOut, MessageSquare, Monitor, Moon, Palette, Plus, Plug, RefreshCw, ShieldCheck, Sun, X } from '@lucide/svelte';
+	import { ChartNoAxesColumn, Globe, Info, KeyRound, Keyboard, Laptop, Library, LogOut, MessageSquare, Monitor, Moon, Palette, Plus, Plug, RefreshCw, ShieldCheck, Sun, X } from '@lucide/svelte';
 	import Button from './Button.svelte';
 	import Dialog from './Dialog.svelte';
 	import Notice from './Notice.svelte';
@@ -7,24 +7,26 @@
 	import { workspace, messageOf } from '$lib/state/workspace.svelte';
 	import { ui } from '$lib/state/ui.svelte';
 	import { prefs, type Theme } from '$lib/state/prefs.svelte';
-	import { formatTokens, modifier } from '$lib/format';
+	import { formatTokens, modelName, modifier } from '$lib/format';
 	import { describeClipboard, detectCapabilities } from '$lib/capabilities';
 	import { APP_NAME } from '$lib/config';
-	import type { ChatSettings, CorpusDiagnostic, CorpusState, DeviceSession, IntegrationToken, Scope } from '$lib/types';
+	import type { ChatSettings, CorpusDiagnostic, CorpusState, DeviceSession, IntegrationToken, Scope, UsageSummary } from '$lib/types';
 
 	/*
-	 * Settings — the instance, in seven panels. Appearance and the keyboard
+	 * Settings — the instance, in eight panels. Appearance and the keyboard
 	 * are the browser's business; Chat is the instance's own, saved to the
-	 * server; Access is who may reach it, from this browser and from scripts;
+	 * server; Usage is what it has spent; Access is who may reach it, from
+	 * this browser and from scripts;
 	 * the rest is what the server was configured with, shown and never edited
 	 * here. The plate keeps one height whichever panel is open, so switching
 	 * never moves the frame; a panel taller than it scrolls.
 	 */
 
-	type Section = 'appearance' | 'chat' | 'keyboard' | 'models' | 'access' | 'corpus' | 'about';
+	type Section = 'appearance' | 'chat' | 'usage' | 'keyboard' | 'models' | 'access' | 'corpus' | 'about';
 	const sections: { id: Section; label: string; icon: typeof Palette }[] = [
 		{ id: 'appearance', label: 'Appearance', icon: Palette },
 		{ id: 'chat', label: 'Chat', icon: MessageSquare },
+		{ id: 'usage', label: 'Usage', icon: ChartNoAxesColumn },
 		{ id: 'keyboard', label: 'Keyboard', icon: Keyboard },
 		{ id: 'models', label: 'Models', icon: Plug },
 		{ id: 'access', label: 'Access', icon: ShieldCheck },
@@ -57,12 +59,13 @@
 	let saved = $state(false);
 	const dirty = $derived(JSON.stringify(draft) !== JSON.stringify(workspace.data.settings));
 	const budgetValid = $derived(Number.isInteger(draft.contextTokens) && draft.contextTokens >= 1000 && draft.contextTokens <= 2_000_000);
-	const valid = $derived(budgetValid && draft.suggestions.every(s => s.label.trim()));
+	const clockValid = $derived(Number.isInteger(draft.responseMinutes) && draft.responseMinutes >= 1 && draft.responseMinutes <= 180);
+	const valid = $derived(budgetValid && clockValid && draft.suggestions.every(s => s.label.trim()));
 
 	async function save() {
 		saving = true; error = ''; saved = false;
 		try {
-			await workspace.saveSettings({ systemPrompt: draft.systemPrompt, contextTokens: draft.contextTokens, thinking: draft.thinking, suggestions: draft.suggestions.map(s => ({ label: s.label.trim(), text: s.text })) });
+			await workspace.saveSettings({ systemPrompt: draft.systemPrompt, contextTokens: draft.contextTokens, thinking: draft.thinking, responseMinutes: draft.responseMinutes, stats: draft.stats, suggestions: draft.suggestions.map(s => ({ label: s.label.trim(), text: s.text })) });
 			Object.assign(draft, structuredClone($state.snapshot(workspace.data.settings)));
 			saved = true;
 			setTimeout(() => (saved = false), 2000);
@@ -75,6 +78,37 @@
 		try { await workspace.logout(); }
 		catch (err) { error = messageOf(err); leaving = false; }
 	}
+
+	/* ------------------------------------------------------------------
+	 * Usage — what was sent and received, as the rows kept it
+	 * --------------------------------------------------------------- */
+
+	const PERIODS: { id: UsageSummary['period']; label: string }[] = [
+		{ id: 'today', label: 'Today' },
+		{ id: 'week', label: '7 days' },
+		{ id: 'month', label: '30 days' },
+		{ id: 'all', label: 'All time' }
+	];
+
+	let usagePeriod = $state<UsageSummary['period']>('month');
+	let usage = $state<UsageSummary | null>(null);
+	let usageBusy = $state(false);
+	/* What was last asked for. Plain, not state: a failed count must not ask again forever. */
+	let usageAsked = '';
+
+	async function loadUsage(period: UsageSummary['period']) {
+		usageBusy = true;
+		try { usage = await workspace.usage(period); }
+		catch (err) { error = messageOf(err); }
+		finally { usageBusy = false; }
+	}
+
+	/* Counted when the panel opens, and again whenever the period changes. */
+	$effect(() => {
+		if (section !== 'usage' || usageAsked === usagePeriod) return;
+		usageAsked = usagePeriod;
+		void loadUsage(usagePeriod);
+	});
 
 	/* ------------------------------------------------------------------
 	 * Access — this browser, the devices signed in, the tokens handed out
@@ -239,7 +273,7 @@
 				</div>
 
 				<h3 class="panel__title">Thinking</h3>
-				<p class="panel__lede">Asks Claude models to think before answering, adaptively, and to show a summary of it; every reply keeps room for up to 16k tokens of thinking on top of its own. Reasoning that other models send is shown either way.</p>
+				<p class="panel__lede">The default for every chat: asks Claude models to think before answering, adaptively, and to show a summary of it; every reply keeps room for up to 16k tokens of thinking on top of its own. Reasoning that other models send is shown either way. A chat can choose otherwise from the options mark in the composer.</p>
 				<div class="rows">
 					<label class="row row--switch">
 						<span class="row__text">
@@ -247,6 +281,24 @@
 							<span class="row__hint">Turn it off for Claude Haiku 4.5 and older Claude models, which reject the request.</span>
 						</span>
 						<Switch bind:checked={draft.thinking} label="Ask models to think before answering" />
+					</label>
+				</div>
+
+				<h3 class="panel__title">Response time</h3>
+				<p class="panel__lede">How long a response may take before it is stopped. A response goes on being written on the server whether or not a tab is watching, so this is the model’s patience, not yours: some think for a quarter of an hour.</p>
+				<div class="budget">
+					<input class="budget__field" type="number" inputmode="numeric" min="1" max="180" step="1" bind:value={draft.responseMinutes} aria-label="Response time limit in minutes" aria-invalid={!clockValid} />
+					<span class="budget__unit">minutes</span>
+				</div>
+
+				<h3 class="panel__title">Statistics</h3>
+				<p class="panel__lede">What each exchange cost and how fast it came, under the messages: the request’s size under yours, the reply’s tokens, its speed and its time under the model’s. Counts are the provider’s own when it reports them, and marked as estimates when it does not. Totals are in Usage.</p>
+				<div class="rows">
+					<label class="row row--switch">
+						<span class="row__text">
+							<span class="row__label">Show statistics under messages</span>
+						</span>
+						<Switch bind:checked={draft.stats} label="Show statistics under messages" />
 					</label>
 				</div>
 
@@ -268,6 +320,48 @@
 					<span class="panel__status" role="status">{saved ? 'Saved' : dirty ? 'Unsaved changes' : ''}</span>
 					<Button size="md" onclick={save} disabled={saving || !dirty || !valid}>{saving ? 'Saving…' : 'Save'}</Button>
 				</div>
+			{:else if section === 'usage'}
+				<h3 class="panel__title">Tokens</h3>
+				<p class="panel__lede">What this instance has sent and received. Counts are the provider’s own where it reported them, and estimates from characters where it did not. A ghost chat is written nowhere, so it counts nowhere. These are the tokens that went over the wire, not a bill — what a provider charges for them is its own arithmetic.</p>
+				<div class="chips" role="group" aria-label="Period">
+					{#each PERIODS as p (p.id)}
+						<button type="button" class="chip" class:is-on={usagePeriod === p.id} aria-pressed={usagePeriod === p.id} onclick={() => (usagePeriod = p.id)}>{p.label}</button>
+					{/each}
+					<span class="usage__status" role="status">{usageBusy ? 'Counting…' : ''}</span>
+				</div>
+				{#if usage && usage.responses}
+					<dl class="rows">
+						<div class="row"><dt class="row__label">Responses</dt><dd class="row__value">{usage.responses.toLocaleString()}</dd></div>
+						<div class="row"><dt class="row__label">Input tokens</dt><dd class="row__value">{usage.input_tokens.toLocaleString()}</dd></div>
+						<div class="row"><dt class="row__label">Output tokens</dt><dd class="row__value">{usage.output_tokens.toLocaleString()}</dd></div>
+					</dl>
+					{#if usage.estimated > 0}
+						<p class="panel__note">{usage.estimated.toLocaleString()} of these carry estimates: their provider reported no count.</p>
+					{/if}
+					<h3 class="panel__title">By model</h3>
+					<table class="usage">
+						<thead>
+							<tr>
+								<th scope="col">Model</th>
+								<th scope="col">Responses</th>
+								<th scope="col">Input</th>
+								<th scope="col">Output</th>
+							</tr>
+						</thead>
+						<tbody>
+							{#each usage.models as m (m.model)}
+								<tr>
+									<th scope="row">{modelName(m.model)}</th>
+									<td>{m.responses.toLocaleString()}</td>
+									<td>{m.input_tokens.toLocaleString()}</td>
+									<td>{m.output_tokens.toLocaleString()}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				{:else if usage}
+					<p class="panel__lede">Nothing counted yet in this period.</p>
+				{/if}
 			{:else if section === 'keyboard'}
 				<h3 class="panel__title">Shortcuts</h3>
 				<p class="panel__lede">The mouse is optional. Menus and lists take the arrow keys once they are open.</p>
@@ -719,6 +813,48 @@ OPENROUTER_API_KEY=your-key
 		background-color: var(--color-accent);
 		border-color: var(--color-accent);
 		color: var(--color-on-accent);
+	}
+
+	/* Whether a count is being fetched, beside the chips that asked for it. */
+	.usage__status {
+		align-self: center;
+		margin-left: var(--space-2);
+		font-size: var(--text-xs);
+		color: var(--color-text-subtle);
+	}
+
+	/* By model: columns that line up, and nothing else — no rules, no fills. */
+	.usage {
+		width: 100%;
+		border-collapse: collapse;
+	}
+
+	.usage th,
+	.usage td {
+		padding-block: var(--space-2);
+		font-size: var(--text-sm);
+		font-weight: var(--weight-regular);
+		text-align: right;
+		font-variant-numeric: tabular-nums;
+		color: var(--color-text-muted);
+	}
+
+	.usage th:first-child,
+	.usage td:first-child {
+		text-align: left;
+		color: var(--color-text);
+		overflow-wrap: anywhere;
+	}
+
+	.usage thead th {
+		font-size: var(--text-xs);
+		color: var(--color-text-subtle);
+		border-bottom: var(--border-width) solid var(--color-border);
+	}
+
+	.usage tbody th:first-child {
+		font-weight: var(--weight-medium);
+		letter-spacing: var(--tracking-tight);
 	}
 
 	/* A token's row may carry its secret beneath it, once. */

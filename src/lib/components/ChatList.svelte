@@ -115,6 +115,12 @@
 			{/each}
 		</section>
 	{/each}
+	<!-- Only once there is a list to be older than: the field is optimistic until the first page lands. -->
+	{#if workspace.moreConversations && workspace.data.conversations.length}
+		<button type="button" class="more" aria-label="Show older conversations" disabled={workspace.loadingOlder} onclick={() => void workspace.loadOlderConversations()}>
+			{workspace.loadingOlder ? 'Loading…' : 'Show older'}
+		</button>
+	{/if}
 	{#if !workspace.visibleConversations.length}
 		<p class="empty">{workspace.ready ? (workspace.project ? 'No chats in this project yet.' : 'Your conversations will appear here.') : 'Opening your workspace…'}</p>
 	{/if}
@@ -322,6 +328,25 @@
 			animation: none;
 			opacity: 0.7;
 		}
+	}
+
+	/* The tail of the archive: a line of muted text on the rows' own text
+	 * inset, not a row of its own. */
+	.more {
+		justify-self: start;
+		padding-inline: var(--space-2);
+		font-size: var(--text-xs);
+		color: var(--color-text-subtle);
+		cursor: pointer;
+		transition: color var(--duration-fast) var(--ease-out);
+	}
+
+	.more:hover:not(:disabled) {
+		color: var(--color-text-strong);
+	}
+
+	.more:disabled {
+		cursor: default;
 	}
 
 	.empty {

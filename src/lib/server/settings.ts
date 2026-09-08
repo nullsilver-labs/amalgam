@@ -1,6 +1,6 @@
 import type pg from 'pg';
 import { z } from 'zod';
-import { DEFAULT_CONTEXT_TOKENS, DEFAULT_SETTINGS, type ChatSettings } from '../types';
+import { DEFAULT_CONTEXT_TOKENS, DEFAULT_RESPONSE_MINUTES, DEFAULT_SETTINGS, type ChatSettings } from '../types';
 
 /*
  * Instance-wide chat settings: the system prompt, the context budget and
@@ -13,6 +13,9 @@ export const chatSettingsSchema = z.object({
   // Defaulted, so a row saved before the budget existed still reads whole.
   contextTokens: z.number().int().min(1000).max(2_000_000).default(DEFAULT_CONTEXT_TOKENS),
   thinking: z.boolean().default(true),
+  // A response's clock. Some models think for a quarter of an hour; nobody has to hold a connection open for it.
+  responseMinutes: z.number().int().min(1).max(180).default(DEFAULT_RESPONSE_MINUTES),
+  stats: z.boolean().default(false),
   suggestions: z.array(z.object({ label: z.string().trim().min(1).max(40), text: z.string().max(2000) })).max(8)
 });
 

@@ -12,14 +12,15 @@ const mocks = vi.hoisted(() => ({ api: vi.fn(), replaceState: vi.fn() }));
 vi.mock('../src/lib/api', () => ({ api: mocks.api }));
 vi.mock('$app/navigation', () => ({ replaceState: mocks.replaceState }));
 
-const modelA: ModelOption = { id: 'local:a', name: 'a', provider: 'Local', destination: 'a.test', window: 8000 };
-const modelB: ModelOption = { id: 'local:b', name: 'b', provider: 'Local', destination: 'b.test', window: null };
+const modelA: ModelOption = { id: 'local:a', name: 'a', provider: 'Local', destination: 'a.test', window: 8000, kind: 'openai' };
+const modelB: ModelOption = { id: 'local:b', name: 'b', provider: 'Local', destination: 'b.test', window: null, kind: 'openai' };
 const CHAT = 'chat-1';
 const conversation = (leaf_id: string | null = null): Conversation => ({ id: CHAT, title: 'Branches', project_id: null, created_at: '', updated_at: '', leaf_id });
 function message(id: string, role: 'user' | 'assistant', parent_id: string | null, extra: Partial<Message> = {}): Message {
   return {
     id, conversation_id: CHAT, role, content: id, status: 'complete', model: role === 'assistant' ? modelA.id : null,
-    error: null, created_at: '', sources: null, parent_id, thinking: null, thinking_ms: null, ...extra
+    error: null, created_at: '', sources: null, parent_id, thinking: null, thinking_ms: null,
+    input_tokens: null, output_tokens: null, tokens_estimated: null, first_token_ms: null, duration_ms: null, ...extra
   };
 }
 /* u1 → a1 and a2 (branches); a2 → u2 → a3. Written in this order. */
@@ -248,6 +249,46 @@ describe('the run loop', () => {
     await workspace.switchBranch(workspace.messages[1], -1);
     expect(ids(workspace.messages)).toEqual(['u1', 'a2', 'u2', 'a3']);
   });
+  it('sends a message again with other words beside the original, under the same parent, and carries the tab\'s thinking choice', async () => {
+    await workspace.boot();
+    await workspace.open(CHAT);
+    await workspace.switchBranch(workspace.messages[1], 1);
+    expect(ids(workspace.messages)).toEqual(['u1', 'a2', 'u2', 'a3']);
+    // u2 follows a2; its edit is a new turn under a2, and the root's edit a new turn under nothing.
+    const u3 = message('u3', 'user', 'a2', { content: 'Said differently' });
+    const a5 = message('a5', 'assistant', 'u3', { content: '', status: 'streaming', model: modelA.id });
+    fetcher.mockResolvedValueOnce(sse([
+      { type: 'start', conversation: conversation('a5'), user: u3, assistant: a5, context: { messages: 1, truncated: false, project: false, system: false, tokens: 1, budget: 32000, window: null } },
+      { type: 'delta', text: 'New answer' },
+      { type: 'done', status: 'complete' }
+    ]));
+    workspace.setThinking(false);
+    workspace.draft = 'kept';
+    await workspace.edit(workspace.messages[2], '  Said differently ');
+    expect(sent(0)).toEqual({ conversationId: CHAT, projectId: null, model: modelA.id, text: 'Said differently', parentId: 'a2', thinking: false });
+    expect(workspace.draft).toBe('kept');
+    expect(ids(workspace.messages)).toEqual(['u1', 'a2', 'u3', 'a5']);
+    expect(workspace.messages[3].content).toBe('New answer');
+    expect(workspace.active.branch(workspace.messages[2])).toEqual({ index: 1, count: 2 });
+    // The root edited names the root as its parent, explicitly: null, not nothing.
+    const u4 = message('u4', 'user', null, { content: 'From the top' });
+    const a6 = message('a6', 'assistant', 'u4', { content: '', status: 'streaming', model: modelA.id });
+    fetcher.mockResolvedValueOnce(sse([
+      { type: 'start', conversation: conversation('a6'), user: u4, assistant: a6, context: { messages: 1, truncated: false, project: false, system: false, tokens: 1, budget: 32000, window: null } },
+      { type: 'done', status: 'complete' }
+    ]));
+    workspace.setThinking(null);
+    await workspace.edit(workspace.messages[0], 'From the top');
+    expect(sent(1)).toEqual({ conversationId: CHAT, projectId: null, model: modelA.id, text: 'From the top', parentId: null });
+    expect(ids(workspace.messages)).toEqual(['u4', 'a6']);
+    expect(workspace.active.branch(workspace.messages[0])).toEqual({ index: 1, count: 2 });
+    // Nothing is sent for empty words, an answer, or while writing.
+    await workspace.edit(workspace.messages[0], '   ');
+    await workspace.edit(workspace.messages[1], 'not a question');
+    workspace.active.busy = true;
+    await workspace.edit(workspace.messages[0], 'while busy');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+  });
   it('refuses to answer again while writing, while a response is stranded, or with a model the server does not list', async () => {
     await workspace.boot();
     await workspace.open(CHAT);
@@ -266,7 +307,7 @@ describe('the run loop', () => {
     await workspace.regenerate(shown, modelB.id);
     expect(fetcher).toHaveBeenCalledTimes(1);
   });
-  it('marks the turn interrupted when the stream ends without a verdict', async () => {
+  it('listens again for what came after the last event heard when the stream drops, and is whole afterwards', async () => {
     await workspace.boot();
     await workspace.open(CHAT);
     workspace.draft = 'Cut off';
@@ -274,11 +315,67 @@ describe('the run loop', () => {
     const a4 = message('a4', 'assistant', 'u3', { content: '', status: 'streaming' });
     fetcher.mockResolvedValueOnce(sse([
       { type: 'start', conversation: conversation('a4'), user: u3, assistant: a4, context: { messages: 1, truncated: false, project: false, system: false, tokens: 1, budget: 32000, window: null } },
-      { type: 'delta', text: 'part' }
+      { type: 'delta', text: 'part', seq: 1 }
     ]));
+    // The server still has the response: the rest comes from the second listen.
+    fetcher.mockResolvedValueOnce(sse([{ type: 'delta', text: ' and the rest', seq: 2 }, { type: 'done', status: 'complete', seq: 3 }]));
     await workspace.send();
-    expect(workspace.messages[3].status).toBe('interrupted');
-    expect(workspace.messages[3].content).toBe('part');
-    expect(workspace.problem).toContain('interrupted');
+    expect(fetcher).toHaveBeenCalledTimes(2);
+    expect(String(fetcher.mock.calls[1][0])).toBe(`/api/chat/stream?conversationId=${CHAT}&after=1`);
+    expect(workspace.messages[3].status).toBe('complete');
+    expect(workspace.messages[3].content).toBe('part and the rest');
+    expect(workspace.problem).toBe('');
+    expect(workspace.busy).toBe(false);
+  });
+  it('reads the row again when the server has nothing left to say, and gives up in words when it cannot be reached', async () => {
+    await workspace.boot();
+    await workspace.open(CHAT);
+    workspace.draft = 'Cut off';
+    const u3 = message('u3', 'user', 'a1', { content: 'Cut off' });
+    const a4 = message('a4', 'assistant', 'u3', { content: '', status: 'streaming' });
+    const opening = (): Extract<ChatEvent, { type: 'start' }> => ({ type: 'start', conversation: conversation('a4'), user: u3, assistant: a4, context: { messages: 1, truncated: false, project: false, system: false, tokens: 1, budget: 32000, window: null } });
+    fetcher.mockResolvedValueOnce(sse([opening(), { type: 'delta', text: 'part', seq: 1 }]));
+    // Nothing being written any more: the row says how it ended.
+    fetcher.mockResolvedValueOnce(new Response(JSON.stringify({ error: 'No response is being written for this conversation.' }), { status: 404 }));
+    const finished = { ...a4, content: 'part and saved', status: 'complete' as const };
+    mocks.api.mockImplementation(async (path: string) => {
+      if (path === '/api/bootstrap') return bootstrap();
+      if (path === `/api/conversations/${CHAT}`) return { conversation: conversation('a4'), messages: [...tree(), u3, finished] };
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+    await workspace.send();
+    expect(workspace.messages[3].status).toBe('complete');
+    expect(workspace.messages[3].content).toBe('part and saved');
+    expect(workspace.problem).toBe('');
+    // Four tries and no answer: the turn is marked, and the sentence says the server goes on.
+    workspace.draft = 'Cut off again';
+    const a5 = message('a5', 'assistant', 'u3', { content: '', status: 'streaming' });
+    fetcher.mockResolvedValueOnce(sse([{ ...opening(), assistant: a5 }, { type: 'delta', text: 'half', seq: 1 }]));
+    fetcher.mockRejectedValue(new Error('offline'));
+    await workspace.send();
+    const half = workspace.active.messages.find(m => m.id === 'a5')!;
+    expect(half.status).toBe('interrupted');
+    expect(half.content).toBe('half');
+    expect(workspace.problem).toContain('goes on being written');
+  }, 20_000);
+  it('follows a response another tab or device is still writing when the conversation opens, from a snapshot', async () => {
+    const u3 = message('u3', 'user', 'a1', { content: 'Elsewhere' });
+    const a4 = message('a4', 'assistant', 'u3', { content: 'checkpointed', status: 'streaming' });
+    mocks.api.mockImplementation(async (path: string) => {
+      if (path === '/api/bootstrap') return bootstrap();
+      if (path === `/api/conversations/${CHAT}`) return { conversation: conversation('a4'), messages: [...tree(), u3, a4] };
+      throw new Error(`Unexpected API request: ${path}`);
+    });
+    fetcher.mockResolvedValueOnce(sse([
+      { type: 'snapshot', content: 'checkpointed and more', thinking: null, thinking_ms: null, seq: 5, elapsed_ms: 3000 },
+      { type: 'delta', text: ', then the end', seq: 6 },
+      { type: 'done', status: 'complete', seq: 7 }
+    ]));
+    await workspace.boot();
+    await workspace.open(CHAT);
+    expect(String(fetcher.mock.calls[0][0])).toBe(`/api/chat/stream?conversationId=${CHAT}`);
+    await vi.waitFor(() => expect(workspace.messages[3].status).toBe('complete'));
+    expect(workspace.messages[3].content).toBe('checkpointed and more, then the end');
+    expect(workspace.busy).toBe(false);
   });
 });

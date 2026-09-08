@@ -53,9 +53,9 @@
 			{/each}
 			{#if workspace.streaming && !workspace.busy}
 				<p class="transcript__stale">
-					A response was running when this conversation opened.
-					<button type="button" onclick={() => void workspace.reload()}>Reload its saved progress</button>
-					or
+					This response could not be followed to its end.
+					<button type="button" onclick={() => void workspace.reload()}>Reload</button>
+					to read what was saved, or
 					<button type="button" onclick={() => void workspace.stop()}>stop it</button>.
 				</p>
 			{/if}

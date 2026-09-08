@@ -17,7 +17,7 @@ export async function GET(event: RequestEvent) {
   // Recover a stranded marker after a final persistence failure, without touching a live run.
   if (!activeRuns.has(id)) await db.query("UPDATE messages SET status='interrupted', error='The response was interrupted. Saved partial text is shown.' WHERE conversation_id=$1 AND status='streaming'", [id]);
   // Every branch, in the order it was written; the conversation's leaf_id says which one was open.
-  const messages = (await db.query('SELECT id, conversation_id, role, content, status, model, error, context_manifest, sources, parent_id, thinking, thinking_ms, created_at FROM messages WHERE conversation_id=$1 ORDER BY position', [id])).rows;
+  const messages = (await db.query('SELECT id, conversation_id, role, content, status, model, error, context_manifest, sources, parent_id, thinking, thinking_ms, input_tokens, output_tokens, tokens_estimated, first_token_ms, duration_ms, created_at FROM messages WHERE conversation_id=$1 ORDER BY position', [id])).rows;
   return json({ conversation, messages });
 }
 export async function PATCH(event: RequestEvent) {

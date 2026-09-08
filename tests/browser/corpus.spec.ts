@@ -33,7 +33,8 @@ test.beforeAll(async ({ browser }) => {
 test.afterAll(async () => { await context.close(); });
 
 async function attach(query: string, title: string) {
-  await page.getByRole('button', { name: 'Sources', exact: false }).click();
+  await page.getByRole('button', { name: 'Attach', exact: true }).click();
+  await page.getByRole('menuitem', { name: 'From your corpus library' }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByLabel('Search your corpus library').fill(query);
   await dialog.getByRole('option', { name: title, exact: false }).click();

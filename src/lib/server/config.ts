@@ -75,7 +75,7 @@ export function readProviders(env: Record<string, string | undefined>): Provider
 export function publicModels(providers: Provider[]): ModelOption[] {
   return providers.flatMap(p => p.models.map(m => ({
     id: `${p.id}:${m.name}`, name: m.name, provider: p.name,
-    destination: new URL(p.baseUrl).host, window: m.window
+    destination: new URL(p.baseUrl).host, window: m.window, kind: p.kind
   })));
 }
 export function resolveModel(providers: Provider[], id: string) {

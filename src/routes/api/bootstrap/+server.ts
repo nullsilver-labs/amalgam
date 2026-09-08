@@ -10,7 +10,7 @@ export async function GET(event: import('./$types').RequestEvent) {
   requireScope(event, 'read');
   const db = await database();
   const [conversations, projects, settings, catalog] = await Promise.all([
-    db.query('SELECT * FROM conversations ORDER BY updated_at DESC LIMIT 200'),
+    db.query("SELECT * FROM conversations ORDER BY date_trunc('milliseconds', updated_at) DESC, id DESC LIMIT 200"),
     db.query('SELECT * FROM projects ORDER BY created_at DESC'),
     readSettings(db),
     modelCatalog(env)

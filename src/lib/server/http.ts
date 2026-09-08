@@ -25,3 +25,10 @@ export async function body<T>(request: Request, schema: ZodType<T, ZodTypeDef, u
   if (!result.success) error(400, result.error.issues[0]?.message || 'Invalid request');
   return result.data;
 }
+
+/** A response as SSE. Never cached, never buffered by a proxy that reads the hint. */
+export function sse(stream: ReadableStream<Uint8Array>): Response {
+  return new Response(stream, { headers: {
+    'Content-Type': 'text/event-stream', 'Cache-Control': 'no-cache, no-transform', 'X-Accel-Buffering': 'no'
+  } });
+}

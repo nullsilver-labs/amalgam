@@ -16,6 +16,14 @@ export interface Message {
   thinking: string | null;
   /** Milliseconds from the request to the first character of the answer. Kept only when the model reported thinking. */
   thinking_ms: number | null;
+  /** For an assistant message: what the request it answered cost, as the provider counted it or as estimated from characters. */
+  input_tokens: number | null;
+  output_tokens: number | null;
+  /** True when the counts are estimates: the provider reported none. */
+  tokens_estimated: boolean | null;
+  /** Milliseconds from the request to the first piece of the reply, and to its last. */
+  first_token_ms: number | null;
+  duration_ms: number | null;
 }
 /** One corpus card as a sent message remembers it — enough to name and link it after a reload. */
 export interface MessageSource {
@@ -23,8 +31,12 @@ export interface MessageSource {
   /** Characters of the card's text that were actually sent, after trimming. */
   chars: number;
 }
-/** `window` is the context size declared for the model in its `_MODELS` entry, in tokens, or null when none was. */
-export interface ModelOption { id: string; name: string; provider: string; destination: string; window: number | null }
+/**
+ * `window` is the context size declared for the model in its `_MODELS` entry, in tokens, or null when none was.
+ * `kind` is the protocol its provider speaks, which decides what a thinking option can do: the Anthropic API takes
+ * one; an OpenAI-style server takes none, and its models reason as they will.
+ */
+export interface ModelOption { id: string; name: string; provider: string; destination: string; window: number | null; kind: 'openai' | 'anthropic' }
 /** A pill under the composer on a new chat: its label, and what it drops into the composer. */
 export interface Suggestion { label: string; text: string }
 /**
@@ -33,13 +45,22 @@ export interface Suggestion { label: string; text: string }
  * adaptive thinking with a shown summary, and every reply keeps extra room
  * for it. Reasoning a model sends of its own accord is shown either way.
  */
-export interface ChatSettings { systemPrompt: string; suggestions: Suggestion[]; contextTokens: number; thinking: boolean }
+export interface ChatSettings {
+  systemPrompt: string; suggestions: Suggestion[]; contextTokens: number; thinking: boolean;
+  /** How long a response may take, in minutes, before it is stopped. */
+  responseMinutes: number;
+  /** Show what each exchange cost and how fast it came, under the messages. */
+  stats: boolean;
+}
 /** The instance's context ceiling until Settings says otherwise: estimated tokens a request may carry. */
 export const DEFAULT_CONTEXT_TOKENS = 32_000;
+export const DEFAULT_RESPONSE_MINUTES = 10;
 export const DEFAULT_SETTINGS: ChatSettings = {
   systemPrompt: '',
   contextTokens: DEFAULT_CONTEXT_TOKENS,
   thinking: true,
+  responseMinutes: DEFAULT_RESPONSE_MINUTES,
+  stats: false,
   suggestions: [
     { label: 'Draft something', text: 'Help me draft ' },
     { label: 'Think it through', text: 'Help me think through a decision. Ask me what I am weighing up.' },
@@ -121,10 +142,35 @@ export interface ChatTurn { role: 'system' | 'user' | 'assistant'; content: stri
 export interface HistoryTurn { role: 'user' | 'assistant'; content: string; status?: MessageStatus }
 /** The most turns a ghost request carries: the newest ones, as a saved conversation's path is read to a depth. */
 export const GHOST_HISTORY_TURNS = 200;
+/**
+ * What a response stream says. `start` opens a fresh request; `snapshot`
+ * opens a stream that joined a response already being written, carrying
+ * everything said so far. The rest are numbered by `seq` from 1, so a
+ * listener that lost its connection can ask for what came after the last
+ * one it heard. A response ends with `done`, or with `error` when it could
+ * not be saved.
+ */
 export type ChatEvent =
   | { type: 'start'; conversation: Conversation; user: Message; assistant: Message; context: ContextInfo }
-  | { type: 'delta'; text: string }
+  | { type: 'snapshot'; content: string; thinking: string | null; thinking_ms: number | null; seq: number; elapsed_ms: number }
+  | { type: 'delta'; text: string; seq?: number }
   /** Reasoning, as the model shows it. Sent with empty text when a model reports thinking without showing any. */
-  | { type: 'thinking'; text: string }
-  | { type: 'done'; status: MessageStatus; error?: string; thinking_ms?: number }
-  | { type: 'error'; error: string };
+  | { type: 'thinking'; text: string; seq?: number }
+  | { type: 'done'; status: MessageStatus; error?: string; thinking_ms?: number; seq?: number; usage?: Usage }
+  | { type: 'error'; error: string; seq?: number };
+
+/** What a response cost and how fast it came, as the row keeps it. */
+export interface Usage {
+  input_tokens: number | null; output_tokens: number | null; tokens_estimated: boolean;
+  first_token_ms: number | null; duration_ms: number;
+}
+/** Settings › Usage: totals over a period, and the same by model. Ghost chats are written nowhere and so count nowhere. */
+export interface UsageSummary {
+  period: 'today' | 'week' | 'month' | 'all';
+  /** When the period begins, ISO; null for all time. */
+  since: string | null;
+  responses: number; input_tokens: number; output_tokens: number;
+  /** How many of those responses carry estimates rather than the provider's counts. */
+  estimated: number;
+  models: { model: string; responses: number; input_tokens: number; output_tokens: number }[];
+}

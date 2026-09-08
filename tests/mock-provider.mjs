@@ -26,6 +26,10 @@ const server = http.createServer(async (req, res) => {
     await new Promise(resolve => setTimeout(resolve, delay));
     if (text.includes('[disconnect]') && i > 25) { res.end(); return; }
   }
+  // Asked to count, the last chunk carries the count and no choices, as OpenAI-style servers do.
+  if (!closed && input.stream_options?.include_usage) {
+    res.write(`data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 321, completion_tokens: 123, total_tokens: 444 } })}\n\n`);
+  }
   if (!closed) res.end('data: [DONE]\n\n');
 });
 server.listen(8891, '0.0.0.0');

@@ -144,6 +144,13 @@ test('context budget: set in Settings, bounded by a declared window, reported pe
   await page.goto('/');
   await page.getByLabel('Instance password').fill(password); await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Where shall we begin?' })).toBeVisible();
+  // A run that failed midway leaves its settings behind: start from the defaults it expects.
+  const before = await (await page.request.get('/api/settings')).json();
+  if (before.contextTokens !== 32000 || before.stats) {
+    expect((await page.request.put('/api/settings', { data: { ...before, contextTokens: 32000, stats: false }, headers: { Origin: origin } })).ok()).toBeTruthy();
+    await page.reload();
+    await expect(page.getByRole('heading', { name: 'Where shall we begin?' })).toBeVisible();
+  }
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const dialog = page.getByRole('dialog');
   await dialog.getByRole('button', { name: 'Chat', exact: true }).click();
@@ -152,6 +159,9 @@ test('context budget: set in Settings, bounded by a declared window, reported pe
   // Below what the fixture's 32k window leaves after the reply's room — 8k
   // with thinking on — so the ceiling is the number that comes back.
   await budget.fill('20000');
+  // The response clock has a default of its own, and statistics are off until asked for.
+  await expect(dialog.getByLabel('Response time limit in minutes')).toHaveValue('10');
+  await dialog.getByRole('switch', { name: 'Show statistics under messages' }).click();
   await dialog.getByRole('button', { name: 'Save', exact: true }).click();
   await expect(dialog.getByRole('status')).toHaveText('Saved');
   // The fixture model is declared with a 32k window in compose.test.yaml.
@@ -162,14 +172,28 @@ test('context budget: set in Settings, bounded by a declared window, reported pe
   await page.getByRole('button', { name: 'Send message' }).click();
   await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
   await expect(page.locator('.prose h2')).toHaveText('A little clarity');
+  // The mock counts 321 in and 123 out when asked to, so nothing here is an estimate.
+  await expect(page.locator('.turn--user .stat')).toHaveText('321 tokens sent');
+  await expect(page.locator('.turn--assistant .stat')).toContainText('123 tokens');
+  await expect(page.locator('.turn--assistant .stat')).toContainText('tokens/s (123 tokens');
   await page.getByRole('button', { name: 'What the model sees' }).click();
   await expect(page.getByRole('dialog')).toContainText('of 20,000 tokens');
   await expect(page.getByRole('dialog')).toContainText('32,000 tokens, declared');
   await expect(page.getByRole('dialog')).toContainText('Everything fit');
   await page.getByRole('dialog').getByRole('button', { name: 'Close' }).click();
+  // Usage totals what the rows kept: at least this one response, counted by the mock.
+  await page.getByRole('button', { name: 'Settings', exact: true }).click();
+  await page.getByRole('dialog').getByRole('button', { name: 'Usage', exact: true }).click();
+  const usage = page.getByRole('dialog');
+  await usage.getByRole('button', { name: 'Today', exact: true }).click();
+  await expect(usage.locator('.row', { hasText: 'Output tokens' })).toBeVisible();
+  await expect(usage.locator('.usage tbody')).toContainText('fixture-text');
+  const shown = Number((await usage.locator('.row', { hasText: 'Input tokens' }).locator('.row__value').innerText()).replace(/[^0-9]/g, ''));
+  expect(shown).toBeGreaterThanOrEqual(321);
+  await usage.getByRole('button', { name: 'Close' }).click();
   // Put the budget back and remove this test's chat, keeping repeated local runs deterministic.
   const settings = await (await page.request.get('/api/settings')).json();
-  expect((await page.request.put('/api/settings', { data: { ...settings, contextTokens: 32000 }, headers: { Origin: origin } })).ok()).toBeTruthy();
+  expect((await page.request.put('/api/settings', { data: { ...settings, contextTokens: 32000, stats: false }, headers: { Origin: origin } })).ok()).toBeTruthy();
   await page.getByRole('button', { name: 'Conversation menu' }).click();
   await page.getByRole('menuitem', { name: 'Delete' }).click();
   await page.getByRole('dialog').getByRole('button', { name: 'Delete conversation', exact: true }).click();
@@ -181,6 +205,12 @@ test('tabs: the strip is always there, a new chat opens beside the one you are i
   await page.goto('/');
   await page.getByLabel('Instance password').fill(password); await page.getByRole('button', { name: 'Continue', exact: true }).click();
   await expect(page.getByRole('heading', { name: 'Where shall we begin?' })).toBeVisible();
+  // A run that failed midway leaves its chats behind; the archive must be clean of them before rows are counted.
+  const leftovers = await (await page.request.get('/api/bootstrap')).json();
+  for (const c of leftovers.conversations.filter((c: { title: string }) => /tab conversation$|^\[slow\] Survives/.test(c.title))) {
+    await page.request.delete(`/api/conversations/${c.id}`, { headers: { Origin: origin } });
+  }
+  if (leftovers.conversations.some((c: { title: string }) => /tab conversation$/.test(c.title))) await page.reload();
   // One blank tab from the start, with nothing to close.
   const tabs = page.getByRole('tablist', { name: 'Open chats' });
   await expect(tabs.getByRole('tab')).toHaveCount(1);
@@ -235,6 +265,30 @@ test('tabs: the strip is always there, a new chat opens beside the one you are i
   await expect(page.getByRole('heading', { name: 'Where shall we begin?' })).toBeVisible();
   await expect(tabs.getByRole('button', { name: 'Close New chat' })).toHaveCount(0);
 
+  // A response survives a reload: the tab listens again from a snapshot and the answer completes.
+  await page.getByLabel('Message amalgam').fill('[slow] Survives a reload'); await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.locator('.prose')).toContainText('A little clarity');
+  await page.reload();
+  await expect(page.getByRole('button', { name: 'Stop response' })).toBeVisible();
+  await expect(page.locator('.prose')).toContainText('The model connection can be changed.', { timeout: 20_000 });
+  await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
+  await expect(page.locator('.status')).toHaveCount(0);
+  // And closing the tab that started it: the response goes on, and is whole when the chat is opened again.
+  await page.getByRole('button', { name: 'New chat', exact: true }).click();
+  await page.getByLabel('Message amalgam').fill('[slow] Survives its tab closing'); await page.getByRole('button', { name: 'Send message' }).click();
+  await expect(page.locator('.prose')).toContainText('A little clarity');
+  await page.getByRole('button', { name: 'Close [slow] Survives its tab closing' }).click();
+  await expect(tabs.getByRole('tab')).toHaveCount(1);
+  await page.getByRole('button', { name: 'Chats', exact: true }).click();
+  await page.locator('.rowwrap').filter({ hasText: 'Survives its tab closing' }).filter({ visible: true }).getByRole('button').first().click();
+  await expect(page.locator('.prose')).toContainText('The model connection can be changed.', { timeout: 20_000 });
+  await expect(page.locator('.status')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
+  // Back to a blank tab for the ghost steps.
+  await tabs.getByRole('tab').first().hover();
+  await page.getByRole('button', { name: /^Close / }).first().click();
+  await expect(tabs.getByRole('tab', { name: 'New chat' })).toHaveAttribute('aria-selected', 'true');
+
   // A blank tab can be made a ghost: the chat is answered but written nowhere.
   const ghostToggle = page.getByRole('button', { name: 'Ghost chat', exact: true });
   await expect(ghostToggle).toHaveAttribute('aria-pressed', 'false');
@@ -270,7 +324,7 @@ test('tabs: the strip is always there, a new chat opens beside the one you are i
   await expect(tabs.getByRole('button', { name: 'Close New chat' })).toHaveCount(0);
   // Remove this test's chats, keeping repeated local runs deterministic.
   const bootstrap = await (await page.request.get('/api/bootstrap')).json();
-  for (const c of bootstrap.conversations.filter((c: { title: string }) => /tab conversation$/.test(c.title))) {
+  for (const c of bootstrap.conversations.filter((c: { title: string }) => /tab conversation$|^\[slow\] Survives/.test(c.title))) {
     await page.request.delete(`/api/conversations/${c.id}`, { headers: { Origin: origin } });
   }
   expect(errors).toEqual([]);
@@ -320,13 +374,39 @@ test('thinking is shown above an answer, and an answer generated again becomes a
   await page.getByRole('button', { name: 'Next branch' }).click();
   await expect(page.getByText('2 / 2')).toBeVisible();
   await expect(page.locator('.bubble')).toHaveCount(2);
+  // A sent message edited goes beside the original, as a branch of its own; the original keeps its answer.
+  await page.locator('.turn--user').last().hover();
+  await page.getByRole('button', { name: 'Edit message' }).last().click();
+  const editField = page.getByLabel('Edit your message');
+  await expect(editField).toHaveValue('[think-tags] and again');
+  await editField.fill('Said differently');
+  await page.getByRole('button', { name: 'Send', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Stop response' })).toHaveCount(0);
+  await expect(page.locator('.bubble').last()).toHaveText('Said differently');
+  await expect(page.getByText('You asked: Said differently')).toBeVisible();
+  await expect(page.locator('.turn--user').last().getByText('2 / 2')).toBeVisible();
+  await page.locator('.turn--user').last().getByRole('button', { name: 'Previous branch' }).click();
+  await expect(page.locator('.bubble').last()).toHaveText('[think-tags] and again');
+  await page.locator('.turn--user').last().getByRole('button', { name: 'Next branch' }).click();
+  await expect(page.locator('.bubble').last()).toHaveText('Said differently');
+  // The chat's options: thinking chosen for this chat alone, and the model's window named or admitted unknown.
+  await page.getByRole('button', { name: 'Chat options' }).click();
+  const options = page.getByRole('dialog', { name: 'Chat options' });
+  await expect(options).toContainText('The instance setting');
+  await expect(options).toContainText('Model window');
+  await options.getByRole('switch', { name: 'Thinking' }).click();
+  await expect(options).toContainText('Set for this chat.');
+  await options.getByRole('button', { name: 'Use the instance setting' }).click();
+  await expect(options).toContainText('The instance setting');
+  await page.keyboard.press('Escape');
+  await expect(options).toHaveCount(0);
   // Every branch is exported, with its parent links.
   const downloadPromise = page.waitForEvent('download');
   await page.getByRole('button', { name: 'Conversation menu' }).click();
   await page.getByRole('menuitem', { name: 'Export as JSON' }).click();
   let exported = ''; for await (const chunk of (await (await downloadPromise).createReadStream())!) exported += chunk;
   const tree = JSON.parse(exported);
-  expect(tree.messages).toHaveLength(7);
+  expect(tree.messages).toHaveLength(9);
   expect(tree.messages.filter((m: { parent_id: string | null }) => m.parent_id === null)).toHaveLength(1);
   // Remove this test's chat, keeping repeated local runs deterministic.
   await page.getByRole('button', { name: 'Conversation menu' }).click();

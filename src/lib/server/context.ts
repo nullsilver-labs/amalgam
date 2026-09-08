@@ -98,8 +98,9 @@ export const SOURCE_ID = /^[A-Za-z0-9_-]{1,64}$/;
  * was configured with.
  *
  * Three shapes. A new turn carries `text`, and follows `parentId` — the end of
- * the branch being read — or, when that is left out, the conversation's own
- * leaf. A regeneration names an assistant message in `regenerate` and carries
+ * the branch being read, or null for a turn that begins the conversation over
+ * as a branch beside its first message — or, when that is left out, the
+ * conversation's own leaf. A regeneration names an assistant message in `regenerate` and carries
  * nothing else: the answer is written again, beside the first, to the same
  * user message with the same attached sources.
  *
@@ -124,21 +125,23 @@ export const chatInputSchema = z.object({
   text: z.string().trim().min(1).max(16000).optional(),
   sources: z.array(z.string().regex(SOURCE_ID, 'A source id may only contain letters, digits, hyphens and underscores'))
     .max(5, 'At most five sources can be attached to one message').optional(),
-  parentId: z.string().uuid().optional(),
+  parentId: z.string().uuid().nullable().optional(),
+  /** Whether this reply is asked to think first. Left out, the instance's setting applies. */
+  thinking: z.boolean().optional(),
   regenerate: z.string().uuid().optional(),
   ghost: z.literal(true).optional(),
   history: z.array(historyTurnSchema).max(GHOST_HISTORY_TURNS, `A ghost chat carries at most ${GHOST_HISTORY_TURNS} turns`).optional()
 }).superRefine((input, ctx) => {
   if (input.ghost) {
     if (!input.history) ctx.addIssue({ code: 'custom', message: 'A ghost chat carries its own history', path: ['history'] });
-    if (input.regenerate || input.parentId) ctx.addIssue({ code: 'custom', message: 'A ghost chat has nothing on the server to name', path: ['ghost'] });
+    if (input.regenerate || input.parentId !== undefined) ctx.addIssue({ code: 'custom', message: 'A ghost chat has nothing on the server to name', path: ['ghost'] });
     if (input.text === undefined) ctx.addIssue({ code: 'custom', message: 'Required', path: ['text'] });
     return;
   }
   if (input.history) ctx.addIssue({ code: 'custom', message: 'Only a ghost chat carries its history', path: ['history'] });
   if (input.regenerate) {
     if (!input.conversationId) ctx.addIssue({ code: 'custom', message: 'A regeneration needs the conversation it belongs to', path: ['conversationId'] });
-    if (input.text !== undefined || input.sources || input.parentId) ctx.addIssue({ code: 'custom', message: 'A regeneration carries no text, sources or parent of its own', path: ['regenerate'] });
+    if (input.text !== undefined || input.sources || input.parentId !== undefined) ctx.addIssue({ code: 'custom', message: 'A regeneration carries no text, sources or parent of its own', path: ['regenerate'] });
   } else if (input.text === undefined) ctx.addIssue({ code: 'custom', message: 'Required', path: ['text'] });
 });
 export type ChatInput = z.infer<typeof chatInputSchema>;

@@ -88,3 +88,15 @@ DO $$ BEGIN
   END IF;
 END $$;
 INSERT INTO schema_version(version) VALUES(4) ON CONFLICT DO NOTHING;
+-- What a response cost and how fast it came. Token counts are the provider's
+-- own when it reported them and an estimate from characters when it did not,
+-- which `tokens_estimated` says. `input_tokens` is the whole request the answer
+-- was given; `first_token_ms` is when the first piece arrived and `duration_ms`
+-- when the last did, both from the request.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS input_tokens integer;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS output_tokens integer;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS tokens_estimated boolean;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS first_token_ms integer;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS duration_ms integer;
+CREATE INDEX IF NOT EXISTS messages_usage ON messages(created_at) WHERE role = 'assistant' AND output_tokens IS NOT NULL;
+INSERT INTO schema_version(version) VALUES(5) ON CONFLICT DO NOTHING;

@@ -13,8 +13,8 @@ const mocks = vi.hoisted(() => ({ api: vi.fn(), replaceState: vi.fn() }));
 vi.mock('../src/lib/api', () => ({ api: mocks.api }));
 vi.mock('$app/navigation', () => ({ replaceState: mocks.replaceState }));
 
-const modelA: ModelOption = { id: 'local:a', name: 'a', provider: 'Local', destination: 'a.test', window: 8000 };
-const modelB: ModelOption = { id: 'local:b', name: 'b', provider: 'Local', destination: 'b.test', window: null };
+const modelA: ModelOption = { id: 'local:a', name: 'a', provider: 'Local', destination: 'a.test', window: 8000, kind: 'openai' };
+const modelB: ModelOption = { id: 'local:b', name: 'b', provider: 'Local', destination: 'b.test', window: null, kind: 'openai' };
 const GHOST = '33333333-3333-4333-8333-333333333333';
 const SAVED = 'chat-saved';
 const saved: Conversation = { id: SAVED, title: 'Kept', project_id: null, created_at: '', updated_at: '', leaf_id: 's2' };
@@ -36,8 +36,8 @@ function storage(): Storage {
 /** What the server hands a ghost: fresh ids, no links, the chat named after the text. */
 function ghostStart(id: string, text: string, model = modelA.id): Extract<ChatEvent, { type: 'start' }> {
   const now = '2026-09-07T12:00:00.000Z';
-  const user: Message = { id: `u-${id}`, conversation_id: GHOST, role: 'user', content: text, status: 'complete', model: null, error: null, created_at: now, sources: null, parent_id: null, thinking: null, thinking_ms: null };
-  const assistant: Message = { id: `a-${id}`, conversation_id: GHOST, role: 'assistant', content: '', status: 'streaming', model, error: null, created_at: now, sources: null, parent_id: user.id, thinking: null, thinking_ms: null };
+  const user: Message = { id: `u-${id}`, conversation_id: GHOST, role: 'user', content: text, status: 'complete', model: null, error: null, created_at: now, sources: null, parent_id: null, thinking: null, thinking_ms: null, input_tokens: null, output_tokens: null, tokens_estimated: null, first_token_ms: null, duration_ms: null };
+  const assistant: Message = { id: `a-${id}`, conversation_id: GHOST, role: 'assistant', content: '', status: 'streaming', model, error: null, created_at: now, sources: null, parent_id: user.id, thinking: null, thinking_ms: null, input_tokens: null, output_tokens: null, tokens_estimated: null, first_token_ms: null, duration_ms: null };
   return {
     type: 'start', user, assistant,
     conversation: { id: GHOST, title: text.slice(0, 80), project_id: null, created_at: now, updated_at: now, leaf_id: assistant.id },
@@ -72,7 +72,7 @@ beforeEach(async () => {
   mocks.api.mockImplementation(async (path: string) => {
     if (path === '/api/bootstrap') return bootstrap();
     if (path === `/api/conversations/${SAVED}`) {
-      const s1: Message = { id: 's1', conversation_id: SAVED, role: 'user', content: 'kept?', status: 'complete', model: null, error: null, created_at: '', sources: null, parent_id: null, thinking: null, thinking_ms: null };
+      const s1: Message = { id: 's1', conversation_id: SAVED, role: 'user', content: 'kept?', status: 'complete', model: null, error: null, created_at: '', sources: null, parent_id: null, thinking: null, thinking_ms: null, input_tokens: null, output_tokens: null, tokens_estimated: null, first_token_ms: null, duration_ms: null };
       const s2: Message = { ...s1, id: 's2', role: 'assistant', content: 'kept.', model: modelA.id, parent_id: 's1' };
       return { conversation: saved, messages: [s1, s2] };
     }

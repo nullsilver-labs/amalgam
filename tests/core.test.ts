@@ -14,7 +14,7 @@ function stream(text: string, chunk = 3) {
 }
 async function collect<T>(input: AsyncIterable<T>) { const result: T[] = []; for await (const part of input) result.push(part); return result; }
 /** The text of every piece a generation yielded, kinds aside. */
-async function texts(input: AsyncIterable<Piece>) { return (await collect(input)).map(p => p.text); }
+async function texts(input: AsyncIterable<Piece>) { return (await collect(input)).flatMap(p => p.kind === 'usage' ? [] : [p.text]); }
 const think = (text: string): Piece => ({ kind: 'thinking', text });
 const say = (text: string): Piece => ({ kind: 'text', text });
 function mockResponse(text: string, type = 'text/event-stream'): typeof fetch {
@@ -170,6 +170,11 @@ describe('chat input', () => {
     expect(chatInputSchema.safeParse({ model: 'x', text: 'hi' }).success).toBe(true);
     expect(chatInputSchema.safeParse({ model: 'x', text: 'hi', conversationId: uuid, parentId: other }).success).toBe(true);
     expect(chatInputSchema.safeParse({ model: 'x', text: 'hi', conversationId: uuid, parentId: 'not-a-uuid' }).success).toBe(false);
+    // A first message written again names the root as its parent: null, kept apart from nothing.
+    const root = chatInputSchema.safeParse({ model: 'x', text: 'hi', conversationId: uuid, parentId: null });
+    expect(root.success && root.data.parentId).toBeNull();
+    expect(chatInputSchema.safeParse({ model: 'x', text: 'hi', thinking: false }).success).toBe(true);
+    expect(chatInputSchema.safeParse({ model: 'x', text: 'hi', thinking: 'yes' }).success).toBe(false);
   });
   it('lets a regeneration carry nothing but the conversation and the answer to redo', () => {
     expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other }).success).toBe(true);
@@ -177,6 +182,7 @@ describe('chat input', () => {
     expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other, text: 'hi' }).success).toBe(false);
     expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other, sources: ['a'] }).success).toBe(false);
     expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other, parentId: uuid }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: other, parentId: null }).success).toBe(false);
     expect(chatInputSchema.safeParse({ conversationId: uuid, model: 'x', regenerate: 'nope' }).success).toBe(false);
   });
   it('lets a ghost chat carry its own history and text, and nothing that names a row', () => {
@@ -186,6 +192,7 @@ describe('chat input', () => {
     expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi' }).success).toBe(false);
     expect(chatInputSchema.safeParse({ ghost: true, model: 'x', history }).success).toBe(false);
     expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history, parentId: other }).success).toBe(false);
+    expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history, parentId: null }).success).toBe(false);
     expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history, regenerate: other }).success).toBe(false);
     expect(chatInputSchema.safeParse({ ghost: true, model: 'x', text: 'hi', history: [{ role: 'system', content: 'no' }] }).success).toBe(false);
     expect(chatInputSchema.safeParse({ ghost: false, model: 'x', text: 'hi' }).success).toBe(false);
@@ -230,6 +237,41 @@ describe('provider adapters', () => {
   it('preserves partial output but reports output limit failures', async () => {
     const fetcher = mockResponse(frame({ choices: [{ delta: { content: 'partial' } }] }) + frame({ choices: [{ finish_reason: 'length' }] }));
     await expect(collect(generate(provider, 'test-model', turns, new AbortController().signal, { fetcher: fetcher }))).rejects.toThrow('output limit');
+  });
+  it('asks OpenAI-style servers to count, hands the count back as a piece, and asks once more without it when refused', async () => {
+    const calls: unknown[] = [];
+    const counting = (async (_url: string, init: RequestInit) => {
+      calls.push(JSON.parse(String(init.body)));
+      return new Response(stream(frame({ choices: [{ delta: { content: 'Hi' } }] }) + frame({ choices: [], usage: { prompt_tokens: 40, completion_tokens: 2 } }) + 'data: [DONE]\n\n'), { headers: { 'Content-Type': 'text/event-stream' } });
+    }) as typeof fetch;
+    const counted = await collect(generate({ ...provider, id: 'counts' }, 'test-model', turns, new AbortController().signal, { fetcher: counting }));
+    expect(counted).toEqual([say('Hi'), { kind: 'usage', input: 40, output: 2 }]);
+    expect(calls[0]).toMatchObject({ stream_options: { include_usage: true } });
+    // A server that answers 400 to the asking is asked again without it, and not asked again after that.
+    const refusals: unknown[] = [];
+    const refusing = (async (_url: string, init: RequestInit) => {
+      const body = JSON.parse(String(init.body));
+      refusals.push(body);
+      if (body.stream_options) return new Response('no', { status: 400 });
+      return new Response(stream(frame({ choices: [{ delta: { content: 'Ok' } }] }) + 'data: [DONE]\n\n'), { headers: { 'Content-Type': 'text/event-stream' } });
+    }) as typeof fetch;
+    const strict = { ...provider, id: 'strict' };
+    expect(await collect(generate(strict, 'test-model', turns, new AbortController().signal, { fetcher: refusing }))).toEqual([say('Ok')]);
+    expect(refusals).toHaveLength(2);
+    expect(refusals[1]).not.toHaveProperty('stream_options');
+    expect(await collect(generate(strict, 'test-model', turns, new AbortController().signal, { fetcher: refusing }))).toEqual([say('Ok')]);
+    expect(refusals).toHaveLength(3);
+    expect(refusals[2]).not.toHaveProperty('stream_options');
+  });
+  it('reads Anthropic counts from the opening and the closing of a message, cache reads included', async () => {
+    const anthro = mockResponse(
+      frame({ type: 'message_start', message: { usage: { input_tokens: 30, cache_read_input_tokens: 70 } } })
+      + frame({ type: 'content_block_delta', delta: { type: 'text_delta', text: 'Ciao' } })
+      + frame({ type: 'message_delta', delta: { stop_reason: 'end_turn' }, usage: { output_tokens: 5 } })
+      + frame({ type: 'message_stop' })
+    );
+    const pieces = await collect(generate({ ...provider, kind: 'anthropic' }, 'claude', turns, new AbortController().signal, { fetcher: anthro }));
+    expect(pieces).toEqual([{ kind: 'usage', input: 100, output: null }, say('Ciao'), { kind: 'usage', input: null, output: 5 }]);
   });
   it('translates Anthropic system instructions, auth and delta events', async () => {
     let sent: RequestInit | undefined;

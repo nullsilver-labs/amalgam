@@ -1,6 +1,8 @@
 <script lang="ts">
 	import { APP_NAME } from '$lib/config';
-	import { ArrowUp, Folder, Info, Library, Settings, Square, X } from '@lucide/svelte';
+	import { ArrowUp, Folder, Info, Library, Plus, Settings, SlidersHorizontal, Square, X } from '@lucide/svelte';
+	import ChatOptions from './ChatOptions.svelte';
+	import Menu, { type MenuEntry } from './Menu.svelte';
 	import ModelPicker from './ModelPicker.svelte';
 	import Notice from './Notice.svelte';
 	import { workspace } from '$lib/state/workspace.svelte';
@@ -10,9 +12,16 @@
 
 	/*
 	 * The composer — the one plate the whole interface is built around. A
-	 * textarea that grows with the draft, and a bottom row: the model on the
-	 * left, send (or stop) on the right. ⌘Enter (Ctrl+Enter) sends; Enter
-	 * breaks the line, as it does everywhere else you write.
+	 * textarea that grows with the draft, and a bottom row: at the left a
+	 * "+" for what a message may carry, the chat's options, then the model;
+	 * send (or stop) at the right. ⌘Enter (Ctrl+Enter) sends; Enter breaks
+	 * the line, as it does everywhere else you write.
+	 *
+	 * The two marks before the model are bare icons, the bar's vocabulary:
+	 * nothing in the row has a field of its own but the send disc. The "+"
+	 * opens a short menu — today the library alone; files will join it —
+	 * and lights while cards are attached. The options mark opens a small
+	 * plate of what this chat does with the model it has.
 	 *
 	 * When cards from the library are attached, they sit above the plate as
 	 * chips — and if the chosen model lives somewhere other than this machine,
@@ -28,6 +37,17 @@
 	const corpus = $derived(workspace.data.integrations.corpus);
 	const destination = $derived(workspace.selectedModel?.destination ?? '');
 	const disclose = $derived(workspace.sources.length > 0 && !!destination && !isLocalDestination(destination));
+
+	let attachOpen = $state(false);
+	let optionsOpen = $state(false);
+	const attachments = $derived.by<MenuEntry[]>(() => [
+		{ id: 'head', heading: 'Attach' },
+		{
+			id: 'corpus', label: 'From your corpus library', icon: Library,
+			hint: !corpus.configured ? 'Not connected on this instance' : workspace.sources.length ? `${workspace.sources.length} of 5 cards attached` : 'Quote up to five cards',
+			disabled: !corpus.configured, onselect: () => ui.open('sources')
+		}
+	]);
 
 	function resize() {
 		if (!textarea) return;
@@ -103,13 +123,21 @@
 		></textarea>
 		<div class="plate__row">
 			<div class="plate__lead">
+				<div class="plate__marks">
+					<div class="plate__anchor">
+						<button type="button" class="mark" class:is-on={workspace.sources.length > 0} aria-label="Attach" aria-haspopup="menu" aria-expanded={attachOpen} title="Attach" disabled={workspace.busy || workspace.loading} onclick={() => (attachOpen = !attachOpen)}>
+							<Plus size={16} strokeWidth={1.75} />
+						</button>
+						{#if attachOpen}<Menu items={attachments} label="Attach" align="start" above wide onclose={() => (attachOpen = false)} />{/if}
+					</div>
+					<div class="plate__anchor">
+						<button type="button" class="mark" aria-label="Chat options" aria-haspopup="dialog" aria-expanded={optionsOpen} title="Chat options" onclick={() => (optionsOpen = !optionsOpen)}>
+							<SlidersHorizontal size={16} strokeWidth={1.75} />
+						</button>
+						{#if optionsOpen}<ChatOptions onclose={() => (optionsOpen = false)} />{/if}
+					</div>
+				</div>
 				<ModelPicker />
-				{#if corpus.configured}
-					<button type="button" class="plate__sources" class:is-on={workspace.sources.length > 0} onclick={() => ui.open('sources')} title="Attach cards from your corpus library">
-						<Library size={12} strokeWidth={1.75} />
-						<span>Sources{workspace.sources.length ? ` (${workspace.sources.length})` : ''}</span>
-					</button>
-				{/if}
 				{#if workspace.project}
 					<span class="plate__chip" title={workspace.project.name}><Folder size={12} strokeWidth={1.75} /><span>{workspace.project.name}</span></span>
 				{/if}
@@ -226,35 +254,49 @@
 		min-width: 0;
 	}
 
-	/* The way into the library, sitting in the plate's row beside the model. */
-	.plate__sources {
-		display: inline-flex;
+	/* The two marks, as the bar's trail stacks its own: 32px boxes, no field,
+	 * a wash on hover and while open. Their glyphs begin where the text does. */
+	.plate__marks {
+		display: flex;
 		align-items: center;
 		gap: var(--space-1);
+		flex: none;
+	}
+
+	/* The menu and the options plate position themselves from this box. */
+	.plate__anchor {
+		position: relative;
+		display: inline-flex;
+	}
+
+	.mark {
+		display: inline-flex;
+		align-items: center;
+		justify-content: center;
+		width: var(--control-h-sm);
 		height: var(--control-h-sm);
-		padding-inline: var(--space-3);
-		border: var(--border-width) solid var(--color-border);
 		border-radius: var(--radius-full);
-		font-size: var(--text-2xs);
-		font-weight: var(--weight-medium);
-		color: var(--color-text-muted);
+		color: var(--color-text-subtle);
 		cursor: pointer;
-		white-space: nowrap;
 		transition:
 			color var(--duration-fast) var(--ease-out),
-			border-color var(--duration-fast) var(--ease-out),
 			background-color var(--duration-fast) var(--ease-out);
 	}
 
-	.plate__sources:hover {
+	.mark:hover:not(:disabled),
+	.mark[aria-expanded='true'] {
 		color: var(--color-text-strong);
-		border-color: var(--color-border-strong);
 		background-color: var(--color-hover);
 	}
 
-	.plate__sources.is-on {
-		color: var(--color-text);
-		border-color: var(--color-border-lit);
+	/* Lit while a message has something attached. */
+	.mark.is-on {
+		color: var(--color-text-strong);
+	}
+
+	.mark:disabled {
+		color: var(--color-text-faint);
+		cursor: default;
 	}
 
 	/* What this message will quote, above the plate, each with a way off. */

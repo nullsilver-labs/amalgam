@@ -41,16 +41,14 @@
 		min-width: 0;
 	}
 
-	/* No max-width here: with the negative margin below it would cap the
-	 * button to a wrapper 4px narrower than its own label. The wrapper's
-	 * min-width: 0 is what lets the row shrink. */
+	/* No max-width here: it would cap the button to its wrapper rather than
+	 * its own label. The wrapper's min-width: 0 is what lets the row shrink. */
 	.picker__button {
 		display: inline-flex;
 		align-items: center;
 		gap: var(--space-1);
 		height: var(--control-h-sm);
 		padding-inline: var(--space-2);
-		margin-left: calc(var(--space-1) * -1);
 		border-radius: var(--radius-full);
 		color: var(--color-text-muted);
 		font-size: var(--text-xs);

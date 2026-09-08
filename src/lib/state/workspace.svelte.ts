@@ -14,6 +14,12 @@
  * chat, since the server keeps none of it. A blank tab can become one, and
  * a ghost is a ghost from its first message on.
  *
+ * A saved response, once started, is the server's to finish: the tab only
+ * listens. Lose the connection and it listens again from the last event it
+ * heard; open a conversation whose response is still being written — after
+ * a reload, in another tab — and it listens from a snapshot of what has been
+ * said. Stopping is a request to the server, never the closing of a tab.
+ *
  * Client-only: `boot()` runs from the page's onMount, and every method
  * assumes a browser (fetch, sessionStorage, the router).
  */
@@ -22,7 +28,7 @@ import { replaceState } from '$app/navigation';
 import { api } from '$lib/api';
 import { eventData } from '$lib/sse';
 import { copyText } from '$lib/clipboard';
-import { DEFAULT_SETTINGS, GHOST_HISTORY_TURNS, type Bootstrap, type ChatEvent, type ChatSettings, type ContextInfo, type Conversation, type CorpusDiagnostic, type CorpusSearchResult, type DeviceSession, type HistoryTurn, type IntegrationToken, type Message, type Project, type Scope, type SelectedSource } from '$lib/types';
+import { DEFAULT_SETTINGS, GHOST_HISTORY_TURNS, type Bootstrap, type ChatEvent, type ChatSettings, type ContextInfo, type Conversation, type CorpusDiagnostic, type CorpusSearchResult, type DeviceSession, type HistoryTurn, type IntegrationToken, type Message, type Project, type Scope, type SelectedSource, type UsageSummary } from '$lib/types';
 import { prefs } from './prefs.svelte';
 
 const EMPTY: Bootstrap = {
@@ -34,6 +40,8 @@ const EMPTY: Bootstrap = {
 /** Open tabs survive a reload of this browser tab, like drafts do. A ghost tab survives as a blank one. */
 const TABS_KEY = 'amalgam:tabs';
 const MAX_TABS = 20;
+/** How many conversations one page of the archive holds, as the server sends them. */
+const CONVERSATION_PAGE = 200;
 
 /** What a ghost request carries of the turns before it: the newest, as far back as the server reads. */
 export function historyOf(thread: Message[]): HistoryTurn[] {
@@ -112,6 +120,8 @@ export class Session {
   startedAt = $state(0);
   /** A ghost chat: held in this tab alone, written nowhere, gone when the tab closes or the page reloads. */
   ghost = $state(false);
+  /** Whether replies in this tab are asked to think first: chosen here, or null for the instance's setting. */
+  thinking = $state<boolean | null>(null);
 
   /** The branch being read, root first: what the transcript shows and a new message follows. */
   thread = $derived(threadOf(this.messages, this.leafId));
@@ -189,6 +199,8 @@ export class Session {
         const lastModel = [...this.messages].reverse().find(m => m.model)?.model;
         this.selectModel(lastModel || this.model);
       }
+      // A response still being written is listened to, not left to a banner.
+      if (this.streaming) void this.attach();
       return true;
     } catch (err) { if (version === this.#requestVersion) this.problem = messageOf(err); return false; }
     finally { if (version === this.#requestVersion) this.loading = false; }
@@ -233,14 +245,43 @@ export class Session {
       // The server holds nothing of a ghost: the branch being read goes with the message.
       await this.#run({
         ghost: true, ...(this.conversation ? { conversationId: this.conversation.id } : {}), projectId: this.projectId, model: this.model, text,
-        ...(sources.length ? { sources } : {}), history: historyOf(this.thread)
+        ...(sources.length ? { sources } : {}), history: historyOf(this.thread), ...this.#thinkingField()
       }, { clear: true });
       return;
     }
     await this.#run({
       conversationId: this.conversation?.id, projectId: this.projectId, model: this.model, text,
-      ...(sources.length ? { sources } : {}), ...(this.conversation && this.leafId ? { parentId: this.leafId } : {})
+      ...(sources.length ? { sources } : {}), ...(this.conversation && this.leafId ? { parentId: this.leafId } : {}), ...this.#thinkingField()
     }, { clear: true });
+  }
+
+  /** The thinking choice as the request carries it: nothing, when the instance's setting is to apply. */
+  #thinkingField() { return this.thinking === null ? {} : { thinking: this.thinking }; }
+
+  /**
+   * Send `message` again with different words: a new turn beside it, under
+   * the same parent, quoting the same cards, answered on a new branch. The
+   * original stays where it was, one arrow away.
+   */
+  async edit(message: Message, text: string) {
+    text = text.trim();
+    if (!text || !this.conversation || !workspace.ready || this.loading || this.busy || this.streaming) return;
+    if (message.role !== 'user' || !workspace.data.models.some(m => m.id === this.model)) return;
+    const sources = message.sources?.map(s => s.id) ?? [];
+    const parent = message.parent_id ?? null;
+    if (this.ghost) {
+      const at = this.thread.findIndex(m => m.id === message.id);
+      if (at < 0) return;
+      await this.#run({
+        ghost: true, conversationId: this.conversation.id, projectId: this.projectId, model: this.model, text,
+        ...(sources.length ? { sources } : {}), history: historyOf(this.thread.slice(0, at)), ...this.#thinkingField()
+      }, { parent });
+      return;
+    }
+    await this.#run({
+      conversationId: this.conversation.id, projectId: this.projectId, model: this.model, text,
+      ...(sources.length ? { sources } : {}), parentId: parent, ...this.#thinkingField()
+    }, {});
   }
 
   /** Answer the message before `message` again, beside it, with this tab's model. */
@@ -255,23 +296,32 @@ export class Session {
       const sources = asked.sources?.map(s => s.id) ?? [];
       await this.#run({
         ghost: true, conversationId: this.conversation.id, projectId: this.projectId, model: this.model, text: asked.content,
-        ...(sources.length ? { sources } : {}), history: historyOf(this.thread.slice(0, at))
+        ...(sources.length ? { sources } : {}), history: historyOf(this.thread.slice(0, at)), ...this.#thinkingField()
       }, { again: asked });
       return;
     }
-    await this.#run({ conversationId: this.conversation.id, model: this.model, regenerate: message.id }, {});
+    await this.#run({ conversationId: this.conversation.id, model: this.model, regenerate: message.id, ...this.#thinkingField() }, {});
   }
+
+  /** The last numbered event heard of the response being written, for asking what came after it. */
+  #seq = 0;
+  /** The response this tab is following. Each event is applied to the row it belongs to. */
+  #assistantId = '';
 
   /**
    * One request to /api/chat, streamed into this tab. `clear` empties the
    * composer once the request is taken; `again` is the user message a ghost
-   * chat is having answered again, which the reply is linked under.
+   * chat is having answered again, which the reply is linked under; `parent`
+   * is where a ghost's new turn goes when not after the branch being read.
+   *
+   * A saved response belongs to the server once it is started: if the
+   * stream drops before the verdict, the tab listens again for what came
+   * after the last event it heard, a few times, before giving up and
+   * saying so. A ghost's response has nowhere else to be heard from.
    */
-  async #run(body: Record<string, unknown>, { clear = false, again = null as Message | null }) {
+  async #run(body: Record<string, unknown>, { clear = false, again = null as Message | null, parent = undefined as string | null | undefined }) {
     this.busy = true; this.problem = '';
-    let accepted = false, terminal = false;
-    let assistantId = '';
-    const written = () => this.messages.find(m => m.id === assistantId);
+    let accepted = false;
     this.#generation = new AbortController();
     try {
       const response = await fetch('/api/chat', {
@@ -282,62 +332,139 @@ export class Session {
       if (response.status === 401) { window.location.assign('/login'); return; }
       if (!response.ok) { const result = await response.json(); throw new Error(result.message || result.error || 'Could not start the response.'); }
       if (!response.body) throw new Error('The response stream is unavailable.');
-      for await (const payload of eventData(response.body)) {
-        const event: ChatEvent = JSON.parse(payload);
-        if (event.type === 'start') {
-          accepted = true;
-          // The request was taken, so the composer empties — attached sources
-          // included. A refusal leaves both where they were, to send again.
-          if (clear) { this.draft = ''; this.sources = []; this.rememberDraft(); }
-          if (this.ghost) {
-            // Nothing was written down: the tab links what came back into its own tree,
-            // under the question asked again or after the end of the branch being read.
-            const user = again ?? { ...event.user, parent_id: this.leafId };
-            const assistant = { ...event.assistant, parent_id: user.id };
-            this.messages = [...this.messages, ...(again ? [] : [user]), assistant];
-            // The first answer names the chat; later ones only move its end.
-            this.conversation = this.conversation
-              ? { ...this.conversation, updated_at: event.conversation.updated_at, leaf_id: assistant.id }
-              : event.conversation;
-          } else {
-            this.conversation = event.conversation;
-            // A regeneration's user message is already here; only what is new is added.
-            const fresh = [event.user, event.assistant].filter(m => !this.messages.some(x => x.id === m.id));
-            this.messages = [...this.messages, ...fresh];
-          }
-          this.projectId = this.conversation.project_id;
-          this.#modelConversationId = this.conversation.id;
-          this.rememberDraft();
-          this.leafId = event.assistant.id; assistantId = event.assistant.id;
-          this.startedAt = Date.now();
-          this.contextInfo = event.context;
-          if (!this.ghost) {
-            workspace.data.conversations = [this.conversation, ...workspace.data.conversations.filter(c => c.id !== this.conversation!.id)];
-            if (workspace.active === this) replaceState(`/?c=${this.conversation.id}`, {});
-          }
-        } else if (event.type === 'thinking') {
-          const m = written();
-          if (m) { if (m.thinking === null) m.thinking = ''; m.thinking += event.text; }
-        } else if (event.type === 'delta') {
-          const m = written();
-          if (m) {
-            if (m.thinking !== null && m.thinking_ms === null) m.thinking_ms = Date.now() - this.startedAt;
-            m.content += event.text;
-          }
-        } else if (event.type === 'done') {
-          terminal = true;
-          const m = written();
-          if (m) { m.status = event.status; m.error = event.error || null; if (event.thinking_ms !== undefined) m.thinking_ms = event.thinking_ms; }
-        } else if (event.type === 'error') { terminal = true; throw new Error(event.error); }
+      const settled = await this.#follow(response.body, event => {
+        accepted = true;
+        // The request was taken, so the composer empties — attached sources
+        // included. A refusal leaves both where they were, to send again.
+        if (clear) { this.draft = ''; this.sources = []; this.rememberDraft(); }
+        if (this.ghost) {
+          // Nothing was written down: the tab links what came back into its own tree,
+          // under the question asked again or after the end of the branch being read.
+          const user = again ?? { ...event.user, parent_id: parent === undefined ? this.leafId : parent };
+          const assistant = { ...event.assistant, parent_id: user.id };
+          this.messages = [...this.messages, ...(again ? [] : [user]), assistant];
+          // The first answer names the chat; later ones only move its end.
+          this.conversation = this.conversation
+            ? { ...this.conversation, updated_at: event.conversation.updated_at, leaf_id: assistant.id }
+            : event.conversation;
+        } else {
+          this.conversation = event.conversation;
+          // A regeneration's user message is already here; only what is new is added.
+          const fresh = [event.user, event.assistant].filter(m => !this.messages.some(x => x.id === m.id));
+          this.messages = [...this.messages, ...fresh];
+        }
+        this.projectId = this.conversation.project_id;
+        this.#modelConversationId = this.conversation.id;
+        this.rememberDraft();
+        this.leafId = event.assistant.id;
+        this.startedAt = Date.now();
+        this.contextInfo = event.context;
+        if (!this.ghost) {
+          workspace.data.conversations = [this.conversation, ...workspace.data.conversations.filter(c => c.id !== this.conversation!.id)];
+          if (workspace.active === this) replaceState(`/?c=${this.conversation.id}`, {});
+        }
+      });
+      if (!settled) {
+        if (accepted && !this.ghost) await this.#resume();
+        else throw new Error('Connection interrupted. Reload the conversation to check the saved response.');
       }
-      if (!terminal) throw new Error('Connection interrupted. Reload the conversation to check the saved response.');
     } catch (err) {
-      this.problem = messageOf(err);
-      if (accepted) {
-        const m = written();
-        if (m?.status === 'streaming') { m.status = 'interrupted'; m.error = 'Connection lost. Reload to check the saved response.'; }
-      }
+      this.#dropped(err, accepted);
     } finally { this.busy = false; this.#generation = undefined; this.focus(); }
+  }
+
+  /**
+   * Listen to a response already being written — one this tab started
+   * before a reload, or that another tab or device did. The server says
+   * everything so far first, then the rest as it comes. Nothing to hear
+   * means the row already says how it ended: it is read again.
+   */
+  async attach() {
+    if (this.busy || this.ghost || !this.conversation) return;
+    const streaming = this.messages.find(m => m.status === 'streaming');
+    if (!streaming) return;
+    this.busy = true; this.problem = '';
+    this.#generation = new AbortController();
+    this.#assistantId = streaming.id;
+    try {
+      const response = await fetch(`/api/chat/stream?conversationId=${encodeURIComponent(this.conversation.id)}`, { signal: this.#generation.signal });
+      if (response.status === 401) { window.location.assign('/login'); return; }
+      if (response.status === 404) { await this.load(this.conversation.id); return; }
+      if (!response.ok || !response.body) throw new Error('Could not follow the response.');
+      if (!(await this.#follow(response.body))) await this.#resume();
+    } catch (err) {
+      this.#dropped(err, true);
+    } finally { this.busy = false; this.#generation = undefined; }
+  }
+
+  /** Ask for what came after the last event heard, with a short wait between tries. */
+  async #resume() {
+    const id = this.conversation?.id;
+    if (!id) return;
+    for (let attempt = 0; attempt < 4; attempt++) {
+      await new Promise(resolve => setTimeout(resolve, 500 * 2 ** attempt));
+      if (this.#generation?.signal.aborted) return;
+      let response: Response;
+      try { response = await fetch(`/api/chat/stream?conversationId=${encodeURIComponent(id)}&after=${this.#seq}`, { signal: this.#generation?.signal }); }
+      catch { continue; }
+      if (response.status === 401) { window.location.assign('/login'); return; }
+      // Nothing to hear: the response ended while the connection was down, and the row says how.
+      if (response.status === 404) { await this.load(id); return; }
+      if (!response.ok || !response.body) continue;
+      if (await this.#follow(response.body)) return;
+    }
+    throw new Error('Connection lost. The response goes on being written on the server; reload the conversation to read it.');
+  }
+
+  /**
+   * Apply a stream's events to this tab. `onstart` handles the opening
+   * event of a fresh request; a snapshot opens a stream joined late.
+   * Resolves true once the verdict arrives, false if the stream ended
+   * without one.
+   */
+  async #follow(stream: ReadableStream<Uint8Array>, onstart?: (event: Extract<ChatEvent, { type: 'start' }>) => void): Promise<boolean> {
+    const written = () => this.messages.find(m => m.id === this.#assistantId);
+    for await (const payload of eventData(stream)) {
+      const event: ChatEvent = JSON.parse(payload);
+      if (event.type === 'start') {
+        this.#assistantId = event.assistant.id; this.#seq = 0;
+        onstart?.(event);
+      } else if (event.type === 'snapshot') {
+        const m = written();
+        if (m) { m.content = event.content; m.thinking = event.thinking; m.thinking_ms = event.thinking_ms; }
+        this.#seq = event.seq;
+        this.startedAt = Date.now() - event.elapsed_ms;
+      } else if (event.type === 'thinking') {
+        const m = written();
+        if (m) { if (m.thinking === null) m.thinking = ''; m.thinking += event.text; }
+        if (event.seq) this.#seq = event.seq;
+      } else if (event.type === 'delta') {
+        const m = written();
+        if (m) {
+          if (m.thinking !== null && m.thinking_ms === null) m.thinking_ms = Date.now() - this.startedAt;
+          m.content += event.text;
+        }
+        if (event.seq) this.#seq = event.seq;
+      } else if (event.type === 'done') {
+        const m = written();
+        if (m) {
+          m.status = event.status; m.error = event.error || null;
+          if (event.thinking_ms !== undefined) m.thinking_ms = event.thinking_ms;
+          if (event.usage) Object.assign(m, event.usage);
+        }
+        return true;
+      } else if (event.type === 'error') throw new Error(event.error);
+    }
+    return false;
+  }
+
+  /** The stream is gone for good: say so, and mark the turn if it was left half-written. */
+  #dropped(err: unknown, accepted: boolean) {
+    this.problem = messageOf(err);
+    if (accepted) {
+      const m = this.messages.find(x => x.id === this.#assistantId);
+      if (m?.status === 'streaming') { m.status = 'interrupted'; m.error = this.ghost ? 'Connection lost.' : 'Connection lost. Reload to check the saved response.'; }
+    }
   }
 
   async stop() {
@@ -346,7 +473,7 @@ export class Session {
     catch (err) { this.problem = messageOf(err); this.#generation?.abort(); }
   }
 
-  /** Re-fetch the open conversation — after a reload found a stranded response. A ghost has nothing to fetch. */
+  /** Re-fetch the open conversation, and follow its response if one is still being written. A ghost has nothing to fetch. */
   async reload() { if (this.conversation && !this.ghost) await this.load(this.conversation.id); }
 }
 
@@ -357,6 +484,11 @@ class Workspace {
   activeKey = $state(this.sessions[0].key);
   /** Set once stored tabs have been restored, so nothing persists over them first. */
   tabsReady = $state(false);
+  /** Whether the archive may hold conversations older than the ones in hand. */
+  moreConversations = $state(true);
+  loadingOlder = $state(false);
+  /** One page at a time: a second click while a page is in flight is nothing. */
+  #loadingOlder = false;
 
   active = $derived(this.sessions.find(s => s.key === this.activeKey) ?? this.sessions[0]);
   activeIndex = $derived(this.sessions.findIndex(s => s.key === this.activeKey));
@@ -444,6 +576,8 @@ class Workspace {
 
   async refresh() {
     this.data = await api<Bootstrap>('/api/bootstrap');
+    // A full page is the only sign there is more; a short one is the end.
+    this.moreConversations = this.data.conversations.length >= CONVERSATION_PAGE;
     // Default only a never-selected session. Catalog failure/removal must not
     // silently move a person's next message to another model or provider.
     for (const s of this.sessions) if (!s.model) s.model = this.data.models[0]?.id || '';
@@ -463,7 +597,7 @@ class Workspace {
     try {
       const raw = sessionStorage.getItem(TABS_KEY);
       if (!raw) return;
-      const stored = JSON.parse(raw) as { tabs: { id: string | null; title?: string; project: string | null; model?: string; ghost?: boolean }[]; active: number };
+      const stored = JSON.parse(raw) as { tabs: { id: string | null; title?: string; project: string | null; model?: string; ghost?: boolean; thinking?: boolean }[]; active: number };
       if (!Array.isArray(stored.tabs) || !stored.tabs.length) return;
       const seen = new Set<string>();
       const sessions: Session[] = [];
@@ -478,6 +612,7 @@ class Workspace {
           s.projectId = s.conversation.project_id;
         } else s.projectId = t.project ?? null;
         if (typeof t.model === 'string' && t.model) s.selectModel(t.model);
+        if (typeof t.thinking === 'boolean') s.thinking = t.thinking;
         sessions.push(s);
       }
       if (!sessions.length) return;
@@ -488,9 +623,12 @@ class Workspace {
 
   /** Called from an effect on the page, so it runs whenever the tabs change. A ghost tab is stored as its place and scope, never its chat. */
   persistTabs() {
-    const tabs = this.sessions.map(s => s.ghost
-      ? { id: null, project: s.projectId, model: s.rememberedModel, ghost: true }
-      : { id: s.conversation?.id ?? null, title: s.conversation?.title, project: s.projectId, model: s.rememberedModel });
+    const tabs = this.sessions.map(s => ({
+      ...(s.ghost
+        ? { id: null, project: s.projectId, model: s.rememberedModel, ghost: true }
+        : { id: s.conversation?.id ?? null, title: s.conversation?.title, project: s.projectId, model: s.rememberedModel }),
+      ...(s.thinking === null ? {} : { thinking: s.thinking })
+    }));
     const active = this.activeIndex;
     if (!this.tabsReady) return;
     try { sessionStorage.setItem(TABS_KEY, JSON.stringify({ tabs, active })); } catch { /* storage may be disabled */ }
@@ -531,7 +669,7 @@ class Workspace {
     await this.activate(s.key);
   }
 
-  /** Close a tab. A response it is writing stops, as it would if the page closed; a ghost chat is gone with it. Closing the last chat leaves a blank tab; a lone blank tab has nothing to close. */
+  /** Close a tab. A saved response it is following goes on being written on the server, to be read later; a ghost chat is gone with it, response and all. Closing the last chat leaves a blank tab; a lone blank tab has nothing to close. */
   closeTab(key: string) {
     const index = this.sessions.findIndex(s => s.key === key);
     if (index < 0) return;
@@ -575,6 +713,16 @@ class Workspace {
   }
 
   switchBranch(message: Message, steps: number) { return this.active.switchBranch(message, steps); }
+
+  /** Send a message of the active tab again, with new words, as a branch beside it. */
+  edit(message: Message, text: string) { return this.active.edit(message, text); }
+
+  /** Whether the active tab's replies are asked to think first: its own choice, else the instance's setting. */
+  get thinking() { return this.active.thinking ?? this.data.settings.thinking; }
+  /** True while the tab has a choice of its own, apart from the instance's setting. */
+  get thinkingChosen() { return this.active.thinking !== null; }
+  /** Choose for this tab, or null to follow the instance's setting again. */
+  setThinking(value: boolean | null) { this.active.thinking = value; }
 
   async rename(id: string, title: string) {
     const holder = this.holder(id);
@@ -624,6 +772,28 @@ class Workspace {
     return api<Conversation[]>(`/api/conversations?q=${encodeURIComponent(query)}`);
   }
 
+  /**
+   * The next page of the archive, asked for by where the list ends rather
+   * than by an offset, so rows moving up while someone reads cannot skip or
+   * repeat one. Appended, since the page carries on where the list stops.
+   */
+  async loadOlderConversations() {
+    if (this.#loadingOlder || !this.moreConversations) return;
+    const last = this.data.conversations[this.data.conversations.length - 1];
+    if (!last) { this.moreConversations = false; return; }
+    this.#loadingOlder = true;
+    this.loadingOlder = true;
+    try {
+      const older = await api<Conversation[]>(
+        `/api/conversations?before=${encodeURIComponent(last.updated_at)}&beforeId=${encodeURIComponent(last.id)}`
+      );
+      const known = new Set(this.data.conversations.map(c => c.id));
+      this.data.conversations = [...this.data.conversations, ...older.filter(c => !known.has(c.id))];
+      this.moreConversations = older.length >= CONVERSATION_PAGE;
+    } catch (err) { this.problem = messageOf(err); }
+    finally { this.#loadingOlder = false; this.loadingOlder = false; }
+  }
+
   async copy(text: string): Promise<boolean> {
     if (await copyText(text)) return true;
     this.problem = 'Clipboard unavailable. Select and copy the text instead.';
@@ -652,6 +822,14 @@ class Workspace {
   revokeSession(id: string) { return api<{ ok: true }>(`/api/sessions/${id}`, { method: 'DELETE' }); }
 
   listTokens() { return api<IntegrationToken[]>('/api/tokens'); }
+
+  /** What was sent and received over a period. Ghost chats are written nowhere, so they count nowhere. */
+  /** Today is the browser's day: its zone goes with the question. */
+  usage(period: UsageSummary['period']) {
+    let zone = '';
+    try { zone = Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { /* no zone to name */ }
+    return api<UsageSummary>(`/api/usage?period=${period}${zone ? `&tz=${encodeURIComponent(zone)}` : ''}`);
+  }
 
   /** The returned `secret` is the only time this value exists outside the browser holding it. */
   createToken(name: string, scopes: Scope[], expiresInDays: number | null) {

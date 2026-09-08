@@ -6,13 +6,14 @@ const mocks = vi.hoisted(() => ({ api: vi.fn(), replaceState: vi.fn() }));
 vi.mock('../src/lib/api', () => ({ api: mocks.api }));
 vi.mock('$app/navigation', () => ({ replaceState: mocks.replaceState }));
 
-const modelA: ModelOption = { id: 'manual:a', name: 'a', provider: 'Manual', destination: 'a.test', window: 8000 };
-const modelB: ModelOption = { id: 'discovered:b', name: 'b', provider: 'Discovered', destination: 'b.test', window: null };
+const modelA: ModelOption = { id: 'manual:a', name: 'a', provider: 'Manual', destination: 'a.test', window: 8000, kind: 'openai' };
+const modelB: ModelOption = { id: 'discovered:b', name: 'b', provider: 'Discovered', destination: 'b.test', window: null, kind: 'openai' };
 const conversation = (id: string): Conversation => ({ id, title: id, project_id: null, created_at: '', updated_at: '', leaf_id: null });
 const history = (id: string, model: string | null) => ({
   conversation: conversation(id), messages: model ? [{
     id: 'message', conversation_id: id, role: 'assistant', content: 'Saved reply', status: 'complete',
-    model, sources: null, error: null, created_at: '', parent_id: null, thinking: null, thinking_ms: null
+    model, sources: null, error: null, created_at: '', parent_id: null, thinking: null, thinking_ms: null,
+    input_tokens: null, output_tokens: null, tokens_estimated: null, first_token_ms: null, duration_ms: null
   } satisfies Message] : []
 });
 function bootstrap(models: ModelOption[], failed = false): Bootstrap {

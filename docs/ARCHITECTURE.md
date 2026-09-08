@@ -54,7 +54,7 @@ Messages form a tree (schema version 4): `parent_id` names the message a message
 
 A user message's `sources` column (schema version 3) is attribution, not content: the ids, titles, types, links and character counts of the cards that were quoted. The message's own text stays what the person typed. That split is what lets the transcript say where a request's material came from after a reload without keeping a stale duplicate of the library.
 
-The UI shows recent 200 conversations; full-text keyword search searches all conversations and returns at most 200. This is not a paginated archive UI yet. Project lists and transcripts are unpaginated in this first release.
+The UI opens with the 200 most recent conversations and pages older ones on request, by keyset (`?before=&beforeId=`, at millisecond grain, the only grain the browser sees); full-text keyword search searches all conversations and returns at most 200. Project lists and transcripts are unpaginated.
 
 ## Deliberate next seams
 
@@ -72,7 +72,7 @@ No tool marketplace, universal API compatibility promise, or automatic cloud fal
 
 Before file/image/audio support, add canonical assets with original source, MIME, size/hash, provenance, versions, and a storage adapter (local directory first; S3-compatible for hosted mode). Ownership is independent of project membership. Never execute generated HTML on the application origin.
 
-Before asynchronous research/media/agents, move generation to persisted jobs and sequenced events with reconnect/replay/cancel semantics. Use a PostgreSQL job queue and a worker from this same codebase initially. Do not patch long-running jobs onto request-owned streams and call them durable.
+Generation is a job in the app process (`src/lib/server/runs.ts`): started by the request, listened to by any number of streams, numbered events kept for its lifetime, the row checkpointed as it goes. That is what a single instance needs; a PostgreSQL job queue and a separate worker are the step to take before asynchronous research, media or agents, not before this.
 
 Live voice needs a provider-appropriate real-time transport (WebRTC/WebSocket), not the text SSE interface.
 

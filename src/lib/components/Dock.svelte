@@ -48,12 +48,18 @@
 		return () => { hover.removeEventListener('change', update); narrow.removeEventListener('change', update); };
 	});
 
+	/* Whether the pointer is over the group at all: a click hands focus to the
+	 * composer, and losing focus must not unlight an item the pointer is still on. */
+	let pointerOver = false;
 	function enter(i: number) { if (canHover && !disabled[i]) hovered = i; }
 	function focus(event: FocusEvent, i: number) { if ((event.target as HTMLElement).matches(':focus-visible')) hovered = i; }
 
-	/* Chats is current while its panel is out; New chat while the page is a
-	 * blank one. Reading a conversation lights nothing until the pointer does. */
-	const activeIndex = $derived(ui.panel ? CHATS : !workspace.current && !workspace.loading ? 0 : -1);
+	/* An item is current while the surface it opens is out: Chats with its
+	 * panel, Search with its palette. A blank page lights nothing — New chat
+	 * is a thing to do, not a place to be — and nor does reading a chat,
+	 * until the pointer does. */
+	const SEARCH = 1;
+	const activeIndex = $derived(ui.panel ? CHATS : ui.modal === 'search' ? SEARCH : -1);
 	const litIndex = $derived(hovered ?? (activeIndex >= 0 ? activeIndex : null));
 	const shown = $derived(litIndex !== null);
 
@@ -102,7 +108,7 @@
 		<Logo label="" />
 	</a>
 
-	<div class="rail__primary" role="group" bind:this={primaryEl} onmouseleave={() => (hovered = null)} onfocusout={() => (hovered = null)}>
+	<div class="rail__primary" role="group" bind:this={primaryEl} onmouseenter={() => (pointerOver = true)} onmouseleave={() => { pointerOver = false; hovered = null; }} onfocusout={() => { if (!pointerOver) hovered = null; }}>
 		<div class="rail__items">
 			{#each primary as item, i (item.id)}
 				<button

@@ -37,7 +37,7 @@ describe('model catalog route integration', () => {
 
   it('publishes a safe bootstrap and resolves its exact discovered selection in chat using the same cache', async () => {
     const result = await (await bootstrap.GET(bootEvent(['read']))).json();
-    expect(result.models).toEqual([{ id: 'compatible:tag:32000', name: 'tag:32000', provider: 'Custom endpoint', destination: 'fixture.test', window: null }]);
+    expect(result.models).toEqual([{ id: 'compatible:tag:32000', name: 'tag:32000', provider: 'Custom endpoint', destination: 'fixture.test', window: null, kind: 'openai' }]);
     expect(result.modelConnections[0].state).toBe('discovered');
     expect(JSON.stringify(result)).not.toContain('upstream-secret');
     expect(JSON.stringify(result)).not.toContain('apiKey');
